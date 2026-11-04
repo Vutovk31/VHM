@@ -1,0 +1,182 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+
+const normalize = value => String(value ?? '').trim().toLowerCase().normalize('NFKC');
+const present = value => typeof value === 'string' && value.trim() !== '';
+const positive = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
+const require = (condition, message) => { if (!condition) throw new Error(message); };
+
+export function validatePolicy(policy) {
+  require(/^\d+\.\d+\.\d+$/.test(policy.version), 'Invalid policy version');
+  require(policy.catalogHost === 'vseinstrumenti.ru', 'Invalid VI domain');
+  require(JSON.stringify(policy.route) === '["MCP","VI_SITE","WEB","MCP_VERIFY"]', 'Invalid pilot route');
+  require(policy.transientRetries === 1 && policy.coverageTarget === 0.95, 'Invalid pilot limits');
+  require(policy.preferredBrands.length && policy.preferredBrands.every(present) &&
+    new Set(policy.preferredBrands.map(normalize)).size === policy.preferredBrands.length, 'Invalid preferred brands');
+}
+
+function verified(card, host) {
+  if (card?.verification?.source !== 'MCP_VERIFY' || !present(card.verification.ref) ||
+      !present(card.siteProductId) || !present(card.title)) return false;
+  try {
+    const url = new URL(card.url);
+    return url.protocol === 'https:' && [host, 'www.' + host].includes(url.hostname) &&
+      url.pathname.startsWith('/product/') && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+function checkRequirements(row, card, analog) {
+  return row.requirements.every(requirement => {
+    const check = card.checks?.[requirement.key];
+    return present(check?.ref) && (check.status === 'PASS' ||
+      (analog && requirement.replaceable === true && check.status === 'DEVIATION' && present(check.detail)));
+  });
+}
+
+function orderQuantity(row, card) {
+  const pack = card?.pack;
+  if (!present(pack?.ref) || !present(pack.orderUnit) || !present(pack.sourceUnit) ||
+      !positive(pack.size) || !positive(row.quantity) ||
+      normalize(row.unit) !== normalize(pack.sourceUnit)) return null;
+  const count = Math.ceil(Number((row.quantity / pack.size).toPrecision(15)));
+  return Number.isSafeInteger(count) && count > 0 ? count : null;
+}
+
+function makeDecision(policy, row, record, permit, accepted, city) {
+  const attempts = record.attempts ?? [];
+  const cards = (record.cards ?? []).filter(card => verified(card, policy.catalogHost));
+  const eligible = cards.filter(card => normalize(card.category) === normalize(row.category));
+  const priority = card => present(card.vmtRef) ? 2 :
+    Number(policy.preferredBrands.some(brand => normalize(brand) === normalize(card.brand)));
+  const delivery = card => !!city && normalize(card?.delivery?.city) === normalize(city) &&
+    card.delivery.status === 'CONFIRMED' && present(card.delivery.ref) &&
+    positive(card.delivery.quantity) && orderQuantity(row, card) !== null &&
+    card.delivery.quantity >= orderQuantity(row, card);
+  const price = card => positive(card?.price?.amount) && card.price.currency === 'RUB' &&
+    present(card.price.at) && present(card.price.ref) && present(card.price.orderUnit) &&
+    normalize(card.price.orderUnit) === normalize(card.pack?.orderUnit) ? card.price.amount : null;
+  const rank = (a, b) => priority(b) - priority(a) || Number(delivery(b)) - Number(delivery(a)) ||
+    (price(a) ?? Infinity) - (price(b) ?? Infinity) || a.siteProductId.localeCompare(b.siteProductId);
+  const exact = card => checkRequirements(row, card, false) &&
+    ['brand', 'model', 'mpn'].every(key => !present(row[key]) || normalize(row[key]) === normalize(card[key]));
+  let status = 'NOT_FOUND';
+  let card;
+  if (row.kind === 'CLARIFY') {
+    status = 'CLARIFICATION_REQUIRED';
+  } else if (row.kind === 'OPEN') {
+    const proposals = eligible.filter(candidate => present(candidate.model) && present(candidate.assumptions) && checkRequirements(row, candidate, false)).sort(rank);
+    card = accepted ? proposals.find(candidate => candidate.siteProductId === accepted.siteProductId) : proposals[0];
+    if (card) status = 'PRODUCT_PROPOSED';
+  } else {
+    card = eligible.filter(candidate => candidate.stage !== 'ANALOG' && exact(candidate))
+      .sort((a, b) => Number(delivery(b)) - Number(delivery(a)))[0];
+    if (card) status = 'EXACT';
+    if (permit && (!card || card.stock?.status === 'OUT_OF_STOCK' || accepted)) {
+      const alternatives = eligible.filter(candidate => candidate.stage === 'ANALOG' && !exact(candidate) &&
+        present(candidate.differences) && checkRequirements(row, candidate, true)).sort(rank);
+      const alternative = accepted ? alternatives.find(candidate => candidate.siteProductId === accepted.siteProductId) : alternatives[0];
+      if (alternative) {
+        card = alternative;
+        status = 'ANALOG_PROPOSED';
+      }
+    }
+  }
+  if (status === 'NOT_FOUND') {
+    if ((record.cards ?? []).some(candidate => !verified(candidate, policy.catalogHost))) status = 'EXACT_UNVERIFIED';
+    else if (!(record.cards ?? []).length && !attempts.some(attempt => attempt.outcome === 'RESULT' || attempt.outcome === 'MISS')) status = 'NOT_SEARCHED';
+  }
+  const proposed = ['ANALOG_PROPOSED', 'PRODUCT_PROPOSED'].includes(status);
+  const approved = proposed && accepted?.siteProductId === card.siteProductId;
+  if (accepted) require(approved, `Approval does not match an eligible proposal: ${row.key}`);
+  const quantity = orderQuantity(row, card);
+  const unitPrice = price(card);
+  const approval = proposed ? (approved ? 'APPROVED' : 'PENDING') : 'NOT_REQUIRED';
+  const supplyConfirmed = delivery(card) && !['CONFLICT', 'OUT_OF_STOCK'].includes(card?.stock?.status);
+  return {
+    ...row, sourceQuantity: row.quantity, status, approval, card: card ?? null, quantity, unitPrice,
+    amount: quantity !== null && unitPrice !== null && Number.isFinite(quantity * unitPrice)
+      ? Math.round(quantity * unitPrice * 100) / 100 : null,
+    stock: card?.stock?.status ?? 'UNKNOWN',
+    delivery: supplyConfirmed ? 'CONFIRMED' : card?.delivery?.status === 'PICKUP_ONLY' &&
+      !!city && normalize(card.delivery.city) === normalize(city) ? 'PICKUP_ONLY' : 'NOT_CONFIRMED',
+    clientText: proposed ? `Предложен товар — ${card.title}, ${card.model ?? card.mpn ?? 'модель не указана'}` :
+      status === 'EXACT' ? card.title : row.clarification ?? '',
+    reason: card && !supplyConfirmed ? 'DELIVERY_UNVERIFIED' :
+      status === 'CLARIFICATION_REQUIRED' ? 'MISSING_REQUIREMENTS' : record.reason ?? status,
+    partial: attempts.some(attempt => ['ERROR', 'UNAVAILABLE'].includes(attempt.outcome)),
+    attempts,
+  };
+}
+
+export function match(policy, intake, evidence) {
+  validatePolicy(policy);
+  require(present(intake.requestId) && intake.policyVersion === policy.version &&
+    evidence.requestId === intake.requestId && evidence.policyVersion === policy.version, 'Request or policy mismatch');
+  require(Array.isArray(intake.rows) && intake.rows.length > 0, 'Missing intake rows');
+  const keys = new Set();
+  for (const row of intake.rows) {
+    require([row.key, row.group, row.text, row.category].every(present) && !keys.has(row.key), 'Invalid or duplicate source row');
+    require(['STRICT', 'OPEN', 'CLARIFY'].includes(row.kind), 'Invalid row kind');
+    require(Array.isArray(row.requirements) && row.requirements.every(item => present(item.key) && present(item.value)) &&
+      new Set(row.requirements.map(item => item.key)).size === row.requirements.length, 'Invalid requirements');
+    const identity = ['brand', 'model', 'mpn'].some(key => present(row[key]));
+    require(row.kind !== 'STRICT' || identity || row.requirements.length > 0, 'Strict row needs requirements');
+    require(row.kind !== 'OPEN' || !identity, 'Open row cannot have explicit identity');
+    require(row.kind !== 'CLARIFY' || present(row.clarification), 'Clarification question missing');
+    keys.add(row.key);
+  }
+  for (const key of Object.keys(evidence.rows ?? {})) require(keys.has(key), 'Evidence row not in intake');
+  const permit = evidence.analogPermission;
+  if (permit) {
+    require(permit.requestId === intake.requestId && present(permit.by) && present(permit.at) &&
+      ['STRICT_ONLY', 'ALLOW_ANALOG_DISCOVERY'].includes(permit.decision) &&
+      Array.isArray(permit.keys) && permit.keys.every(key => keys.has(key)), 'Invalid analog permission');
+  }
+  const approvals = new Map();
+  for (const approval of evidence.approvals ?? []) {
+    require(approval.requestId === intake.requestId && keys.has(approval.key) && !approvals.has(approval.key) &&
+      present(approval.siteProductId) && present(approval.by) && present(approval.at), 'Invalid product approval');
+    approvals.set(approval.key, approval);
+  }
+  const rows = intake.rows.map(row => {
+    const record = Object.hasOwn(evidence.rows ?? {}, row.key) ? evidence.rows[row.key] : {};
+    const allowed = row.kind === 'STRICT' && permit?.decision === 'ALLOW_ANALOG_DISCOVERY' && permit.keys.includes(row.key);
+    require(allowed || !(record.cards ?? []).some(card => card.stage === 'ANALOG'), `Analog discovery lacks permission: ${row.key}`);
+    return makeDecision(policy, row, record, allowed, approvals.get(row.key), intake.city);
+  });
+  const groups = new Map();
+  const procurement = [];
+  const hunter = [];
+  const approvalNeeded = [];
+  for (const row of rows) {
+    const closed = row.status === 'EXACT' || row.approval === 'APPROVED';
+    groups.set(row.group, (groups.get(row.group) ?? true) && closed);
+    if (closed && row.quantity && present(row.card.viCode)) {
+      procurement.push(`${row.card.viCode} — ${row.card.title} — ${row.quantity} ${row.card.pack.orderUnit}`);
+    }
+    if (row.quantity && present(row.card?.title)) hunter.push(`${row.card.title} ${row.quantity} ${row.card.pack.orderUnit}`);
+    if (row.kind === 'STRICT' && (row.status !== 'EXACT' || row.stock === 'OUT_OF_STOCK') &&
+        permit?.decision !== 'STRICT_ONLY' && !permit?.keys.includes(row.key)) approvalNeeded.push(row.key);
+  }
+  const closedGroups = [...groups.values()].filter(Boolean).length;
+  return {
+    requestId: intake.requestId, policyVersion: policy.version, city: intake.city ?? '',
+    remarks: intake.remarks ?? [], rows, procurement, hunter, approvalNeeded,
+    metrics: {
+      sourceRows: intake.rows.length, reportedRows: rows.length, groups: groups.size, closedGroups,
+      coverage: closedGroups / groups.size, target: policy.coverageTarget,
+      exact: rows.filter(row => row.status === 'EXACT').length,
+      proposed: rows.filter(row => row.approval === 'PENDING').length,
+      approved: rows.filter(row => row.approval === 'APPROVED').length,
+      deliveryConfirmed: rows.filter(row => row.delivery === 'CONFIRMED').length,
+    },
+  };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const [policy, intake, evidence, output] = process.argv.slice(2);
+  const read = path => JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
+  writeFileSync(output, JSON.stringify(match(read(policy), read(intake), read(evidence)), null, 2));
+}
