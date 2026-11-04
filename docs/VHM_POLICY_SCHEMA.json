@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VHM E03 routing proposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "status",
+    "region",
+    "candidate_depth",
+    "routes",
+    "retry",
+    "recovery",
+    "commercial"
+  ],
+  "properties": {
+    "version": {
+      "const": "e03-draft-1"
+    },
+    "status": {
+      "const": "review_required"
+    },
+    "region": {
+      "const": "Moscow"
+    },
+    "candidate_depth": {
+      "const": 4
+    },
+    "routes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "A",
+        "B",
+        "C"
+      ],
+      "properties": {
+        "A": {
+          "const": [
+            "WEB_DOMAIN",
+            "MCP_VERIFY"
+          ]
+        },
+        "B": {
+          "const": [
+            "MCP_TEXT",
+            "DETERMINISTIC_VERIFY"
+          ]
+        },
+        "C": {
+          "const": [
+            "MCP_TEXT",
+            "WEB_DOMAIN_RECOVERY",
+            "MCP_VERIFY"
+          ]
+        }
+      }
+    },
+    "retry": {
+      "const": {
+        "mcp": "connector_instructions"
+      }
+    },
+    "recovery": {
+      "const": [
+        "BRAND_MODEL",
+        "MPN_TEXT",
+        "BRAND_MPN",
+        "NORMALIZED_NAME",
+        "REQUIRED_ATTRIBUTES",
+        "VI_SITE",
+        "WEB_DOMAIN",
+        "YANDEX_AUTHORIZED",
+        "MCP_VERIFY",
+        "DETERMINISTIC_DECISION"
+      ]
+    },
+    "commercial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preferred",
+        "unresolved",
+        "eligible"
+      ],
+      "properties": {
+        "preferred": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "unresolved": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "eligible": {
+          "const": [
+            "OPEN_SPEC",
+            "APPROVED_ANALOG"
+          ]
+        }
+      }
+    }
+  }
+}

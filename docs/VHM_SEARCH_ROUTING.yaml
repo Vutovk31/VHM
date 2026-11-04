@@ -1,0 +1,25 @@
+version: "e03-draft-1"
+status: review_required
+region: Moscow
+candidate_depth: 4
+routes:
+  A: [WEB_DOMAIN, MCP_VERIFY]
+  B: [MCP_TEXT, DETERMINISTIC_VERIFY]
+  C: [MCP_TEXT, WEB_DOMAIN_RECOVERY, MCP_VERIFY]
+retry:
+  mcp: connector_instructions
+recovery:
+  - BRAND_MODEL
+  - MPN_TEXT
+  - BRAND_MPN
+  - NORMALIZED_NAME
+  - REQUIRED_ATTRIBUTES
+  - VI_SITE
+  - WEB_DOMAIN
+  - YANDEX_AUTHORIZED
+  - MCP_VERIFY
+  - DETERMINISTIC_DECISION
+commercial:
+  preferred: [Inforce, Gigant, AEG, Ryobi, KEYANG, Grizzly, ATLET, KENDO, DCA]
+  unresolved: [Tiyang]
+  eligible: [OPEN_SPEC, APPROVED_ANALOG]
