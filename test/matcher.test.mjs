@@ -108,3 +108,21 @@ test('approval of an open proposal contributes to coverage and procurement', () 
   assert.equal(result.metrics.coverage, 1);
   assert.equal(result.procurement.length, 1);
 });
+
+test('confirmed sales multiple and exact quantity constrain procurement independently of SKU', () => {
+  const candidate = {...card, pack: {...card.pack, orderMultiple: 3},
+    delivery: {status: 'CONFIRMED', city: 'Сочи', quantity: 2, ref: 'delivery fixture'}};
+  const evidence = {[strict.key]: {cards: [candidate]}};
+  const rounded = run([strict], evidence).rows[0];
+  assert.equal(rounded.quantity, 3);
+  assert.equal(rounded.quantityVerification.excessQuantity, 19);
+  assert.equal(rounded.delivery, 'NOT_CONFIRMED');
+  const exact = run([{...strict, exactQuantity: true}], evidence);
+  assert.equal(exact.rows[0].status, 'EXACT');
+  assert.equal(exact.rows[0].quantityVerification.status, 'EXACT_QUANTITY_CONFLICT');
+  assert.equal(exact.rows[0].quantityVerification.minimumOrderQuantity, 3);
+  assert.equal(exact.rows[0].quantity, null);
+  assert.deepEqual(exact.procurement, []);
+  assert.equal(run([{...strict, quantity: 30, exactQuantity: true}], evidence).rows[0]
+    .quantityVerification.excessQuantity, 0);
+});

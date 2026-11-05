@@ -64,14 +64,26 @@ function candidateDiagnostics(policy, row, candidate, permit) {
     verificationRef: candidate.verification?.ref ?? null, reasons};
 }
 
-function orderQuantity(row, card) {
-  if (present(row.quantityClarification)) return null;
+function quantityCheck(row, card) {
   const pack = card?.pack;
+  const unknown = {status: 'NOT_VERIFIED', orderQuantity: null, excessQuantity: null};
   if (!present(pack?.ref) || !present(pack.orderUnit) || !present(pack.sourceUnit) ||
       !positive(pack.size) || !positive(row.quantity) ||
-      normalize(row.unit) !== normalize(pack.sourceUnit)) return null;
-  const count = Math.ceil(Number((row.quantity / pack.size).toPrecision(15)));
-  return Number.isSafeInteger(count) && count > 0 ? count : null;
+      normalize(row.unit) !== normalize(pack.sourceUnit) || present(row.quantityClarification)) return unknown;
+  const multiple = pack.orderMultiple === undefined ? 1 : pack.orderMultiple;
+  if (!Number.isSafeInteger(multiple) || multiple <= 0) return unknown;
+  const count = Math.ceil(Number((row.quantity / pack.size / multiple).toPrecision(15))) * multiple;
+  if (!Number.isSafeInteger(count) || count <= 0) return unknown;
+  const supplied = count * pack.size;
+  if (!Number.isFinite(supplied)) return unknown;
+  const excessQuantity = Math.max(0, Number((supplied - row.quantity).toPrecision(15)));
+  const hasExcess = excessQuantity > Math.max(supplied, row.quantity) * Number.EPSILON * 4;
+  const evidence = {packSize: pack.size, orderUnit: pack.orderUnit, orderMultiple: multiple, ref: pack.ref};
+  if (row.exactQuantity === true && hasExcess) {
+    return {...unknown, ...evidence, status: 'EXACT_QUANTITY_CONFLICT',
+      minimumOrderQuantity: count, excessQuantity};
+  }
+  return {...evidence, status: 'VERIFIED', orderQuantity: count, excessQuantity: hasExcess ? excessQuantity : 0};
 }
 
 function makeDecision(policy, row, record, permit, accepted, city) {
@@ -82,8 +94,8 @@ function makeDecision(policy, row, record, permit, accepted, city) {
     Number(policy.preferredBrands.some(brand => normalize(brand) === normalize(card.brand)));
   const delivery = card => !present(row.deliveryClarification) && !!city && normalize(card?.delivery?.city) === normalize(city) &&
     card.delivery.status === 'CONFIRMED' && present(card.delivery.ref) &&
-    positive(card.delivery.quantity) && orderQuantity(row, card) !== null &&
-    card.delivery.quantity >= orderQuantity(row, card);
+    positive(card.delivery.quantity) && quantityCheck(row, card).orderQuantity !== null &&
+    card.delivery.quantity >= quantityCheck(row, card).orderQuantity;
   const price = card => !present(row.quoteClarification) && positive(card?.price?.amount) && card.price.currency === 'RUB' &&
     present(card.price.at) && present(card.price.ref) && present(card.price.orderUnit) &&
     normalize(card.price.orderUnit) === normalize(card.pack?.orderUnit) ? card.price.amount : null;
@@ -120,12 +132,13 @@ function makeDecision(policy, row, record, permit, accepted, city) {
   const proposed = ['ANALOG_PROPOSED', 'PRODUCT_PROPOSED'].includes(status);
   const approved = proposed && accepted?.siteProductId === card.siteProductId;
   if (accepted) require(approved, `Approval does not match an eligible proposal: ${row.key}`);
-  const quantity = orderQuantity(row, card);
+  const quantityVerification = quantityCheck(row, card);
+  const quantity = quantityVerification.orderQuantity;
   const unitPrice = price(card);
   const approval = proposed ? (approved ? 'APPROVED' : 'PENDING') : 'NOT_REQUIRED';
   const supplyConfirmed = delivery(card) && !['CONFLICT', 'OUT_OF_STOCK'].includes(card?.stock?.status);
   return {
-    ...row, sourceQuantity: row.quantity, status, approval, card: card ?? null, quantity, unitPrice,
+    ...row, sourceQuantity: row.quantity, status, approval, card: card ?? null, quantity, quantityVerification, unitPrice,
     amount: quantity !== null && unitPrice !== null && Number.isFinite(quantity * unitPrice)
       ? Math.round(quantity * unitPrice * 100) / 100 : null,
     stock: card?.stock?.status ?? 'UNKNOWN',

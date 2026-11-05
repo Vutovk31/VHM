@@ -99,6 +99,7 @@ export function normalizeRequest({ requestId, policyVersion, city = '', rows, re
     return {
       key, number: source.number ?? line, location, line, text: source.text,
       group: tidy(source.group) || null, quantity, unit: unit || null, original: { ...source },
+      ...(source.exactQuantity === true ? { exactQuantity: true } : {}),
       product, requirements: source.requirements ?? (compiled?.complete ? compiled.requirements : []),
       compilation: compiled,
       analysis: extractProductText(source.text),
