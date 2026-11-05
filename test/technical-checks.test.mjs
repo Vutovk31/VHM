@@ -37,3 +37,19 @@ test('explicit field units are usable and a conflicting unit label stays unknown
  assert.equal(evaluateCharacteristics(requirements,[{name:'Размер min (мм)',value:'7'}],'ref').size.status,'PASS');
  assert.equal(evaluateCharacteristics(requirements,[{name:'Размер min (мм)',value:'0.7',unit:'см'}],'ref').size.status,'UNKNOWN');
 });
+
+test('declared semantic aliases and source model spacing do not permit suffix changes',()=>{
+ const requirements=[req('shape','Форма','oneOf',['Г-образный','угловой']),
+   req('model','@title','modelToken','BEWS18-125BL LI-502C')];
+ const pass=evaluateCharacteristics(requirements,[{name:'Форма',value:'угловой'},
+   {name:'@title',value:'AEG BEWS18-125BLLI-502C 4935464417'}],'ref');
+ assert.equal(pass.shape.status,'PASS');
+ assert.equal(pass.model.status,'PASS');
+ const fail=evaluateCharacteristics(requirements,[{name:'Форма',value:'прямой'},
+   {name:'@title',value:'AEG BEWS18-125BLLI-502C-X'}],'ref');
+ assert.equal(fail.shape.status,'FAIL');
+ assert.equal(fail.model.status,'FAIL');
+ const material=evaluateCharacteristics([req('m','Материал рукояти','word','фиберглас')],[{name:'Материал рукояти',value:'стекловолокно/фиберглас'}],'ref');
+ assert.equal(material.m.status,'PASS');
+ assert.throws(()=>evaluateCharacteristics([req('m','@title','word','Model')],[],'ref'),/Identity/);
+});

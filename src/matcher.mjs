@@ -36,6 +36,7 @@ function checkRequirements(row, card, analog) {
 }
 
 function orderQuantity(row, card) {
+  if (present(row.quantityClarification)) return null;
   const pack = card?.pack;
   if (!present(pack?.ref) || !present(pack.orderUnit) || !present(pack.sourceUnit) ||
       !positive(pack.size) || !positive(row.quantity) ||
@@ -50,11 +51,11 @@ function makeDecision(policy, row, record, permit, accepted, city) {
   const eligible = cards.filter(card => normalize(card.category) === normalize(row.category));
   const priority = card => present(card.vmtRef) ? 2 :
     Number(policy.preferredBrands.some(brand => normalize(brand) === normalize(card.brand)));
-  const delivery = card => !!city && normalize(card?.delivery?.city) === normalize(city) &&
+  const delivery = card => !present(row.deliveryClarification) && !!city && normalize(card?.delivery?.city) === normalize(city) &&
     card.delivery.status === 'CONFIRMED' && present(card.delivery.ref) &&
     positive(card.delivery.quantity) && orderQuantity(row, card) !== null &&
     card.delivery.quantity >= orderQuantity(row, card);
-  const price = card => positive(card?.price?.amount) && card.price.currency === 'RUB' &&
+  const price = card => !present(row.quoteClarification) && positive(card?.price?.amount) && card.price.currency === 'RUB' &&
     present(card.price.at) && present(card.price.ref) && present(card.price.orderUnit) &&
     normalize(card.price.orderUnit) === normalize(card.pack?.orderUnit) ? card.price.amount : null;
   const rank = (a, b) => priority(b) - priority(a) || Number(delivery(b)) - Number(delivery(a)) ||

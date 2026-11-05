@@ -37,7 +37,8 @@ addSheet('Основной подбор', [
   ['Валюта', r => r.unitPrice !== null ? r.card.price.currency : null],
   ['Дата цены', r => r.unitPrice !== null ? r.card.price.at : null],
   ['Ссылка', r => r.card?.url, 52], ['Наличие', r => r.stock], ['Доставка', r => r.delivery],
-  ['Согласование', r => r.approval], ['Причина / комментарий', r => [r.reason, r.notes].filter(Boolean).join(' · '), 50],
+  ['Согласование', r => r.approval], ['Причина / комментарий', r =>
+    [r.reason, r.notes, r.quantityClarification, r.deliveryClarification, r.quoteClarification].filter(Boolean).join(' · '), 50],
 ], result.rows);
 addSheet('Аналоги', [
   ['Ключ строки', r => r.key], ['Исходный №', r => r.number], ['Исходный товар', r => r.text, 48],
@@ -54,6 +55,7 @@ addSheet('Для клиента', [
   ['Исходный №', r => r.number], ['Исходная позиция', r => r.text, 48], ['Результат', r => r.status],
   ['Товар / уточнение', r => r.clientText, 55], ['Отличия / допущения', r => r.card?.differences ?? r.card?.assumptions, 48],
   ['Согласование', r => r.approval],
+  ['Открытые вопросы', r => [r.quantityClarification, r.deliveryClarification, r.quoteClarification].filter(Boolean).join('\n'), 55],
 ], result.rows);
 const control = [
   ['Заявка', result.requestId], ['Версия политики', result.policyVersion], ['Город', result.city],

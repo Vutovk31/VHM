@@ -60,6 +60,7 @@ export function applyInterpretation(snapshot, response, request = buildInterpret
     const sources = fragments(row);
     const covered = new Map([...sources].map(([field]) => [field, new Set()]));
     const bindings = new Map();
+    const axisQuestions = { QUANTITY: [], DELIVERY: [], QUOTE: [] };
     let unresolved = false;
     const requirements = new Map();
     for (const item of review.requirements) {
@@ -73,7 +74,7 @@ export function applyInterpretation(snapshot, response, request = buildInterpret
       if (!raw || !Number.isSafeInteger(span.start) || !Number.isSafeInteger(span.end) ||
           span.start < 0 || span.end <= span.start || span.end > raw.length ||
           raw.slice(span.start, span.end) !== span.text) throw new Error('Invalid source span');
-      if (!['REQUIREMENT','BRAND','CATEGORY','SYNTAX','UNRESOLVED'].includes(claim.role)) {
+      if (!['REQUIREMENT','BRAND','CATEGORY','SYNTAX','UNRESOLVED','QUANTITY','DELIVERY','QUOTE'].includes(claim.role)) {
         throw new Error('Invalid source disposition');
       }
       if (claim.role === 'SYNTAX' && span.text.split(/\s+/u).some(word => !syntax.has(normalize(word)))) {
@@ -92,6 +93,15 @@ export function applyInterpretation(snapshot, response, request = buildInterpret
         for (const key of claim.keys) bindings.set(key, [...(bindings.get(key) ?? []), span]);
       }
       if (claim.role === 'UNRESOLVED') unresolved = true;
+      if (Object.hasOwn(axisQuestions, claim.role)) {
+        const keywords = { QUANTITY: /колич|комплект|фасов|упаков|шт|флакон|метр|бухт|излиш|кратн|отгруз/iu,
+          DELIVERY: /достав|самовывоз|адрес|срок|регион|объект|город|налич/iu,
+          QUOTE: /цен|руб|ндс|стоим|оплат/iu };
+        if (!span.field.startsWith('notes.') || !present(claim.question) || !keywords[claim.role].test(span.text)) {
+          throw new Error('Invalid nontechnical clarification disposition');
+        }
+        axisQuestions[claim.role].push(claim.question);
+      }
       for (let i = span.start; i < span.end; i++) covered.get(span.field).add(i);
     }
     const missing = [...sources].some(([field, raw]) => Array.from({length:raw.length},(_,i)=>i).some(i =>
@@ -104,6 +114,9 @@ export function applyInterpretation(snapshot, response, request = buildInterpret
       ...row, product: {...row.product, category:review.category,
         brand:review.brand || row.product.brand || (row.analysis.brands.length===1?row.analysis.brands[0].value:'')},
       requirements:[...requirements.values()].map(item => ({...item,sources:bindings.get(item.key)})),
+      quantityClarification: row.quantityClarification || axisQuestions.QUANTITY.join('\n'),
+      deliveryClarification: row.deliveryClarification || axisQuestions.DELIVERY.join('\n'),
+      quoteClarification: row.quoteClarification || axisQuestions.QUOTE.join('\n'),
       interpretation:{actor:response.actor,sourceDigest:review.sourceDigest,complete:!clarify,
         mode:clarify?'CLARIFY':review.mode,question:clarify?review.question:undefined,claims:review.claims},
     });

@@ -33,3 +33,9 @@ test('size with Latin units is a measure and cannot become an identifier hint', 
   assert.deepEqual(result.identifiers.map(x=>x.value),['WE-005305']);
   assert.equal(result.measures[0].value,'6.0x125');
 });
+
+test('press washer screws cannot be classified as a hydraulic press',()=>{
+ assert.equal(extractProductText('Саморез с прессшайбой 4,2х13 ARNO INDUSTRIES').category.value,'саморез');
+ assert.equal(extractProductText('Пресс гидравлический ручной ПРГ-70 КВТ').category.value,'пресс');
+ assert.equal(extractProductText('Пресс-клещи КВТ').category.value,'пресс');
+});

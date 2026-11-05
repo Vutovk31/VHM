@@ -7,6 +7,7 @@ const units = new Map([
   ['вт', ['power', 1]], ['w', ['power', 1]], ['квт', ['power', 1000]],
   ['ач', ['capacity', 1]], ['ah', ['capacity', 1]],
   ['нм', ['torque', 1]], ['nm', ['torque', 1]],
+  ['об/мин', ['rotation', 1]], ['rpm', ['rotation', 1]],
   ['шт', ['count', 1]], ['шт.', ['count', 1]], ['', ['dimensionless', 1]],
 ]);
 const unit = value => units.get(text(value).replace(/[·*.\s]/gu, ''));
@@ -43,6 +44,19 @@ function check(actual, expected) {
       if (typeof expected.expected !== 'string' || !expected.expected.trim()) throw new Error('Text expected is required');
       return !text(actual.value) ? 'UNKNOWN' : text(actual.value) === text(expected.expected) ? 'PASS' : 'FAIL';
     }
+    case 'oneOf': {
+      if (!Array.isArray(expected.expected) || !expected.expected.length || expected.expected.length > 20 ||
+          expected.expected.some(value => typeof value !== 'string' || !value.trim())) throw new Error('Explicit text alternatives are required');
+      return !text(actual.value) ? 'UNKNOWN' : expected.expected.some(value => text(value) === text(actual.value)) ? 'PASS' : 'FAIL';
+    }
+    case 'modelToken': {
+      if (typeof expected.expected !== 'string' || !expected.expected.trim() || expected.expected.length > 512) throw new Error('Model token is required');
+      if (!text(actual.value)) return 'UNKNOWN';
+      const pattern = expected.expected.trim().split(/\s+/u).map(part => part.replace(/[.*+?^$()|[\]\\{}]/g, '\\$&')).join('\\s*');
+      const expression = new RegExp('(^|[^\\p{L}\\p{N}./-])' + pattern + '(?=$|[^\\p{L}\\p{N}./-])', 'iu');
+      return expression.test(String(actual.value)) ? 'PASS' : 'FAIL';
+    }
+    case 'word':
     case 'token': {
       if (typeof expected.expected !== 'string' || !expected.expected.trim()) throw new Error('Token expected is required');
       const actualText = text(actual.value), token = text(expected.expected);
@@ -50,7 +64,8 @@ function check(actual, expected) {
       let offset = actualText.indexOf(token);
       while (offset !== -1) {
         const before = actualText.slice(0, offset), after = actualText.slice(offset + token.length);
-        if (!/[\p{L}\p{N}./-]$/u.test(before) && !/^[\p{L}\p{N}./-]/u.test(after)) return 'PASS';
+        const boundary = expected.kind === 'word' ? /[\p{L}\p{N}]/u : /[\p{L}\p{N}./-]/u;
+        if (!boundary.test([...before].at(-1) ?? '') && !boundary.test([...after][0] ?? '')) return 'PASS';
         offset = actualText.indexOf(token, offset + 1);
       }
       return 'FAIL';
@@ -76,6 +91,7 @@ export function evaluateCharacteristics(requirements, characteristics, ref) {
       result[requirement.key] = { status: 'UNKNOWN', ref, detail: 'No structured technical test' };
       continue;
     }
+    if (field.startsWith('@') && test.kind === 'word') throw new Error('Identity metadata requires a strict token test');
     // Validate the expected representation even when the provider omitted the field.
     check({ value: null, unit: null }, test);
     const facts = characteristics.filter(item => text(item.name) === text(field));

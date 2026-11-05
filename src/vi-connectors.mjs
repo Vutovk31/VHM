@@ -13,6 +13,31 @@ function unpack(result) {
   throw new Error('VI MCP returned no structured payload');
 }
 
+export function projectVerifiedProduct(raw, requirements, ref, observedAt = null) {
+  if (!validId(raw?.id) || !present(raw?.name) || !present(ref)) throw new Error('Raw product and evidence reference required');
+  const analysis = extractProductText(raw.name);
+  const characteristics = [
+    ...(Array.isArray(raw.characteristics) ? raw.characteristics : []).filter(item =>
+      typeof item.name === 'string' && !item.name.startsWith('@')),
+    { name: '@title', value: raw.name },
+    { name: '@siteProductId', value: raw.id },
+    ...(present(raw.sku) ? [{ name: '@viCode', value: raw.sku }] : []),
+  ];
+  return {
+    siteProductId: raw.id, viCode: raw.sku, title: raw.name, url: raw.url,
+    category: analysis.category?.value ?? 'UNCLASSIFIED',
+    brand: analysis.brands.length === 1 ? analysis.brands[0].value : undefined,
+    stage: 'EXACT', characteristics,
+    checks: evaluateCharacteristics(requirements, characteristics, ref),
+    verification: { source: 'MCP_VERIFY', ref: ref },
+    stock: { status: raw.availability === 'in_stock' ? 'IN_STOCK_MCP' :
+      raw.availability === 'out_of_stock' ? 'OUT_OF_STOCK' : 'UNKNOWN',
+    city: 'Москва', ref: ref },
+    observedPrice: typeof raw.price === 'number' && Number.isFinite(raw.price) && raw.price >= 0 ?
+      { amount: raw.price, currency: 'RUB', at: observedAt, ref: ref } : null,
+  };
+}
+
 export function createViConnectors({ invoke, persist, session }) {
   if (typeof invoke !== 'function' || typeof persist !== 'function' ||
       session?.summaryAccepted !== true || !present(session.instructionsVersion)) {
@@ -46,7 +71,7 @@ export function createViConnectors({ invoke, persist, session }) {
         });
       }
       signal?.throwIfAborted();
-      return { data, ref };
+      return { data, ref, at };
     } finally {
       active = false;
     }
@@ -91,27 +116,7 @@ export function createViConnectors({ invoke, persist, session }) {
       }
 
       return products.filter(raw => validId(raw.id) && present(raw.name)).map(raw => {
-        const analysis = extractProductText(raw.name);
-        const characteristics = [
-          ...(Array.isArray(raw.characteristics) ? raw.characteristics : []).filter(item =>
-            typeof item.name === 'string' && !item.name.startsWith('@')),
-          { name: '@title', value: raw.name },
-          { name: '@siteProductId', value: raw.id },
-          ...(present(raw.sku) ? [{ name: '@viCode', value: raw.sku }] : []),
-        ];
-        return {
-          siteProductId: raw.id, viCode: raw.sku, title: raw.name, url: raw.url,
-          category: analysis.category?.value ?? 'UNCLASSIFIED',
-          brand: analysis.brands.length === 1 ? analysis.brands[0].value : undefined,
-          stage: 'EXACT', characteristics,
-          checks: evaluateCharacteristics(requirements, characteristics, response.ref),
-          verification: { source: 'MCP_VERIFY', ref: response.ref },
-          stock: { status: raw.availability === 'in_stock' ? 'IN_STOCK_MCP' :
-            raw.availability === 'out_of_stock' ? 'OUT_OF_STOCK' : 'UNKNOWN',
-          city: 'Москва', ref: response.ref },
-          observedPrice: typeof raw.price === 'number' && Number.isFinite(raw.price) && raw.price >= 0 ?
-            { amount: raw.price, currency: 'RUB', at: new Date().toISOString(), ref: response.ref } : null,
-        };
+        return projectVerifiedProduct(raw, requirements, response.ref, response.at);
       });
     },
   };

@@ -1,3 +1,5 @@
+import {readFileSync} from 'node:fs';
+import {runStrictWorkflow} from '../src/workflow.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {normalizeRequest} from '../src/intake.mjs';
@@ -61,4 +63,36 @@ test('an explicit clarification gate cannot be cleared by a complete host dispos
  response.rows[0].question='Подтвердите исходное условие допуска';
  const result=applyInterpretation(snapshot,response,request);
  assert.equal(result.rows[0].interpretation.mode,'CLARIFY');
+});
+
+test('quantity, delivery and quotation questions preserve technical matching but block unsupported outputs',async()=>{
+ const {snapshot,response}=setup();
+ const notes=['Уточните количество упаковок','Подтвердите доставку в город','Укажите цену за упаковку'];
+ snapshot.rows[0].original.notes=notes;
+ snapshot.city='Москва';
+ const request=buildInterpretationRequest(snapshot);
+ const review=response.rows[0];
+ review.mode='STRICT';
+ review.sourceDigest=request.rows[0].sourceDigest;
+ for(const [index,role] of ['QUANTITY','DELIVERY','QUOTE'].entries()) {
+  review.claims.push({role,question:notes[index],source:{field:'notes.'+index,start:0,end:notes[index].length,text:notes[index]}});
+ }
+ const interpreted=applyInterpretation(snapshot,response,request);
+ assert.equal(interpreted.rows[0].interpretation.complete,true);
+ const policy=JSON.parse(readFileSync(new URL('../policy/vi.json',import.meta.url),'utf8'));
+ const card={siteProductId:'10',viCode:'20',title:'Молоток 800 г',url:'https://www.vseinstrumenti.ru/product/molotok-10/',
+   category:'молоток',stage:'EXACT',verification:{source:'MCP_VERIFY',ref:'fixture'},
+   characteristics:[{name:'Кованый',value:'да'},{name:'Вес бойка',value:'800',unit:'г'}],
+   pack:{sourceUnit:'шт',size:1,orderUnit:'шт',ref:'fixture'},
+   price:{amount:100,currency:'RUB',at:'2026-11-05',orderUnit:'шт',ref:'fixture'},
+   delivery:{city:'Москва',quantity:2,status:'CONFIRMED',ref:'fixture'}};
+ const run=await runStrictWorkflow({policy,snapshot:interpreted,route:'B',maxCallsPerRow:2,
+   connectors:{searchMcp:async()=>[{siteProductId:'10'}],verifyMcp:async()=>[card]}});
+ const result=run.result.rows[0];
+ assert.equal(result.status,'EXACT');
+ assert.equal(result.sourceQuantity,2);
+ assert.equal(result.quantity,null);
+ assert.equal(result.unitPrice,null);
+ assert.equal(result.delivery,'NOT_CONFIRMED');
+ assert.equal(run.result.procurement.length,0);
 });

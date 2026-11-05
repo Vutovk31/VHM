@@ -9,7 +9,7 @@ const routeChannels = {
 };
 const provider = channel => channel === 'WEB' ? 'WEB' : 'MCP';
 
-function matcherRow(row) {
+export function matcherRow(row) {
   const { brand, model, mpn, viCode, siteProductId, series } = row.product;
   const category = row.product.category || row.analysis?.category?.value;
   const kind = row.interpretation?.mode ?? row.original?.kind;
