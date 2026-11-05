@@ -1,5 +1,6 @@
 import { match } from './matcher.mjs';
 import { planSearch } from './search-plan.mjs';
+import { evaluateCharacteristics } from './technical-checks.mjs';
 
 const text = value => typeof value === 'string' && value.trim() !== '';
 const routeChannels = {
@@ -82,6 +83,9 @@ export async function runStrictWorkflow({ policy, snapshot, route, connectors = 
   boundedValue(candidateDepth, 1, 20, 'candidate depth');
 
   const intake = { ...snapshot, rows: snapshot.rows.map(matcherRow) };
+  for (const row of intake.rows) {
+    evaluateCharacteristics(row.requirements.filter(requirement => requirement.test), [], 'requirement-validation');
+  }
   const evidence = { requestId: intake.requestId, policyVersion: intake.policyVersion,
     route, rows: Object.create(null) };
   match(policy, intake, evidence); // Validate the whole request before outbound calls.
@@ -139,7 +143,10 @@ export async function runStrictWorkflow({ policy, snapshot, route, connectors = 
         if (!card || card.stage === 'ANALOG' || seenCards.has(card.siteProductId)) continue;
         if (!locators.some(locator => Object.entries(locator).every(([key, value]) => card[key] === value))) continue;
         seenCards.add(card.siteProductId);
-        record.cards.push(card);
+        const typed = row.requirements.filter(requirement => requirement.test);
+        const checks = typed.length && text(card.verification?.ref) ? evaluateCharacteristics(
+          typed, card.characteristics ?? [], card.verification.ref) : {};
+        record.cards.push({ ...card, checks: { ...card.checks, ...checks } });
       }
       const singleEvidence = { ...evidence, rows: { [row.key]: record } };
       const result = match(policy, { ...intake, rows: [row] }, singleEvidence).rows[0];

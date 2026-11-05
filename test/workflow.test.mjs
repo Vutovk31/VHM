@@ -69,3 +69,19 @@ test('automatic category and identifier hints permit discovery while technical a
   assert.equal(result.result.metrics.exact,0);
   assert.equal(Object.values(result.evidence.rows)[0].cards.length,1);
 });
+
+test('typed requirements are rechecked against raw characteristics before Matcher acceptance', async () => {
+  const row={...source,requirements:[{key:'capacity',value:'4 Ач',field:'Емкость',
+    test:{kind:'number',expected:4,unit:'Ач'}}]};
+  for (const [actual,exact] of [['2.0',0],['4.0',1]]) {
+    const result=await runStrictWorkflow({policy,snapshot:snapshot([row]),route:'B',maxCallsPerRow:2,connectors:{
+      searchMcp:async()=>[{siteProductId:'10'}],
+      verifyMcp:async()=>[{...card,checks:{capacity:{status:'PASS',ref:'untrusted-precomputed'}},
+        characteristics:[{name:'Емкость',value:actual,unit:'А*ч'}]}],
+    }});
+    assert.equal(result.result.metrics.exact,exact);
+    const checked=Object.values(result.evidence.rows)[0].cards[0].checks.capacity;
+    assert.equal(checked.ref,'fixture#response');
+    assert.equal(checked.status,exact?'PASS':'FAIL');
+  }
+});
