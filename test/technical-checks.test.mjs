@@ -23,3 +23,11 @@ test('unstructured legacy requirements remain unknown and malformed structured t
  assert.throws(()=>evaluateCharacteristics([req('x','Длина','number','1','м')],[],'ref'),/Numeric/);
  assert.throws(()=>evaluateCharacteristics([req('x','Шарнир','boolean','да')],[],'ref'),/Boolean/);
 });
+
+test('identity tokens preserve model suffix boundaries and reject substring false friends',()=>{
+ const requirement=[req('model','@title','token','DTW285Z')];
+ assert.equal(evaluateCharacteristics(requirement,[{name:'@title',value:'Гайковерт Makita DTW285Z'}],'ref').model.status,'PASS');
+ assert.equal(evaluateCharacteristics(requirement,[{name:'@title',value:'Гайковерт Makita DTW285ZRTJ'}],'ref').model.status,'FAIL');
+ assert.equal(evaluateCharacteristics(requirement,[{name:'@title',value:'Гайковерт Makita XDTW285Z'}],'ref').model.status,'FAIL');
+ assert.equal(evaluateCharacteristics(requirement,[{name:'@title',value:'Гайковерт Makita DTW285Z-RTJ'}],'ref').model.status,'FAIL');
+});

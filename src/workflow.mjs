@@ -137,8 +137,14 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
       }
       record.candidateLocators.push(...locators);
       if (!locators.length) return false;
-      const cards = await call('MCP_VERIFY', connectors.verifyMcp, { candidates: locators,
-        requirements: row.requirements, limit: locators.length });
+      const ids = locators.filter(locator => locator.siteProductId);
+      const batches = [...(ids.length ? [ids] : []), ...locators.filter(locator => !locator.siteProductId).map(locator => [locator])];
+      const cards = [];
+      for (const candidates of batches) {
+        cards.push(...await call('MCP_VERIFY', connectors.verifyMcp, { candidates,
+          requirements: row.requirements, limit: candidates.length }));
+        if (calls >= maxCallsPerRow || signal.aborted || blocked.has('MCP')) break;
+      }
       for (const card of cards.slice(0, locators.length)) {
         if (!card || (!analogKeys && card.stage === 'ANALOG') || seenCards.has(card.siteProductId)) continue;
         if (!locators.some(locator => Object.entries(locator).every(([key, value]) => card[key] === value))) continue;

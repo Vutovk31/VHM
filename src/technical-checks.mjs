@@ -43,6 +43,18 @@ function check(actual, expected) {
       if (typeof expected.expected !== 'string' || !expected.expected.trim()) throw new Error('Text expected is required');
       return !text(actual.value) ? 'UNKNOWN' : text(actual.value) === text(expected.expected) ? 'PASS' : 'FAIL';
     }
+    case 'token': {
+      if (typeof expected.expected !== 'string' || !expected.expected.trim()) throw new Error('Token expected is required');
+      const actualText = text(actual.value), token = text(expected.expected);
+      if (!actualText) return 'UNKNOWN';
+      let offset = actualText.indexOf(token);
+      while (offset !== -1) {
+        const before = actualText.slice(0, offset), after = actualText.slice(offset + token.length);
+        if (!/[\p{L}\p{N}./-]$/u.test(before) && !/^[\p{L}\p{N}./-]/u.test(after)) return 'PASS';
+        offset = actualText.indexOf(token, offset + 1);
+      }
+      return 'FAIL';
+    }
     default: throw new Error('Unsupported technical test');
   }
 }
