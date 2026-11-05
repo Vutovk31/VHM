@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { extractProductText } from './normalize-product.mjs';
+import { compileTechnicalRequirements } from './compile-requirements.mjs';
 
 const tidy = value => String(value ?? '').normalize('NFC').trim().replace(/\s+/gu, ' ');
 const units = new Map([
@@ -88,15 +89,18 @@ export function normalizeRequest({ requestId, policyVersion, city = '', rows, re
     const rawUnit = tidy(source.unit).toLowerCase().replace(/\.$/u, '');
     const unit = units.get(rawUnit) ?? '';
     if (quantity === null || !unit) remarks.push({ key, code: 'QUANTITY_OR_UNIT_UNVERIFIED' });
+    const compiled = source.requirements === undefined ? compileTechnicalRequirements(source) : null;
     const product = {
-      name: tidy(source.text), category: tidy(source.category), brand: tidy(source.brand),
+      name: tidy(source.text), category: tidy(source.category) || (compiled?.complete ? compiled.category : ''),
+      brand: tidy(source.brand) || (compiled?.complete ? compiled.brand : ''),
       model: tidy(source.model), mpn: tidy(source.mpn), viCode: tidy(source.viCode),
       siteProductId: tidy(source.siteProductId), series: tidy(source.series),
     };
     return {
       key, number: source.number ?? line, location, line, text: source.text,
       group: tidy(source.group) || null, quantity, unit: unit || null, original: { ...source },
-      product, requirements: source.requirements ?? [],
+      product, requirements: source.requirements ?? (compiled?.complete ? compiled.requirements : []),
+      compilation: compiled,
       analysis: extractProductText(source.text),
     };
   });

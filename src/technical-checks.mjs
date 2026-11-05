@@ -55,6 +55,10 @@ function check(actual, expected) {
       }
       return 'FAIL';
     }
+    case 'notToken': {
+      const result = check(actual, { ...expected, kind: 'token' });
+      return result === 'UNKNOWN' ? 'UNKNOWN' : result === 'PASS' ? 'FAIL' : 'PASS';
+    }
     default: throw new Error('Unsupported technical test');
   }
 }
