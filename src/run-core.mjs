@@ -6,6 +6,7 @@ import { loadRun, saveRun } from './run-store.mjs';
 import { createHostTransport } from './host-transport.mjs';
 import { createViConnectors } from './vi-connectors.mjs';
 import { createWebConnector } from './web-connector.mjs';
+import { interpretThroughHost } from './host-normalization.mjs';
 
 const [input, outputDirectory, route, sessionFile, permissionFile] = process.argv.slice(2);
 if (!input || !outputDirectory || !['A','B','C'].includes(route) || !sessionFile) {
@@ -16,7 +17,8 @@ const directory = resolve(outputDirectory);
 await mkdir(directory,{recursive:true});
 const policy = await read(new URL('../policy/vi.json',import.meta.url));
 const transport = await createHostTransport(join(directory,'host'));
-const connectors = { ...createViConnectors({...transport,session:await read(sessionFile)}),
+const session = await read(sessionFile);
+const connectors = { ...createViConnectors({...transport,session}),
   ...createWebConnector(transport) };
 const limits = { deadlineMs: Number(process.env.VHM_HOST_DEADLINE_MS ?? 30_000) };
 const prior = await loadRun(directory);
@@ -27,7 +29,10 @@ if (permissionFile) {
 } else {
   if (prior) throw new Error('A checkpoint already exists. Resume it or choose a new request directory');
   const source = await read(input);
-  const snapshot = source.rows?.[0]?.product ? source : normalizeRequest(source);
+  let snapshot = source.rows?.[0]?.product ? source : normalizeRequest(source);
+  if (session.technicalNormalization === true) {
+    snapshot = await interpretThroughHost(snapshot, transport, AbortSignal.timeout(300_000));
+  }
   run = await runStrictWorkflow({policy,snapshot,route,connectors,...limits});
 }
 const checkpoint = await saveRun(directory,run,prior?.revision??0);

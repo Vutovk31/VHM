@@ -31,3 +31,9 @@ test('identity tokens preserve model suffix boundaries and reject substring fals
  assert.equal(evaluateCharacteristics(requirement,[{name:'@title',value:'Гайковерт Makita XDTW285Z'}],'ref').model.status,'FAIL');
  assert.equal(evaluateCharacteristics(requirement,[{name:'@title',value:'Гайковерт Makita DTW285Z-RTJ'}],'ref').model.status,'FAIL');
 });
+
+test('explicit field units are usable and a conflicting unit label stays unknown',()=>{
+ const requirements=[req('size','Размер min (мм)','number',7,'мм')];
+ assert.equal(evaluateCharacteristics(requirements,[{name:'Размер min (мм)',value:'7'}],'ref').size.status,'PASS');
+ assert.equal(evaluateCharacteristics(requirements,[{name:'Размер min (мм)',value:'0.7',unit:'см'}],'ref').size.status,'UNKNOWN');
+});

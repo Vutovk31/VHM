@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout } from 'node:timers/promises';
 
-const methods = new Set(['search_products', 'get_product', 'get_products', 'web_search']);
+const methods = new Set(['search_products', 'get_product', 'get_products', 'web_search', 'normalize_request']);
 
 /** Local transport serviced by the authorized Codex host. Contains no credentials. */
 export async function createHostTransport(directory) {

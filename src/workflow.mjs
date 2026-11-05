@@ -12,7 +12,7 @@ const provider = channel => channel === 'WEB' ? 'WEB' : 'MCP';
 function matcherRow(row) {
   const { brand, model, mpn, viCode, siteProductId, series } = row.product;
   const category = row.product.category || row.analysis?.category?.value;
-  const kind = row.original?.kind;
+  const kind = row.interpretation?.mode ?? row.original?.kind;
   const requirements = [...row.requirements];
   const clarify = !text(category) || requirements.length === 0 || kind === 'CLARIFY';
   for (const [key, value] of Object.entries({ viCode, siteProductId, series })) {
@@ -24,7 +24,7 @@ function matcherRow(row) {
     ...row, category: category || 'UNCLASSIFIED', group: row.group || category || 'UNCLASSIFIED',
     brand, model, mpn, requirements,
     kind: clarify ? 'CLARIFY' : kind === 'OPEN' && ![brand, model, mpn, viCode, siteProductId].some(text) ? 'OPEN' : 'STRICT',
-    clarification: clarify ? row.original?.clarification || (!text(category)
+    clarification: clarify ? row.interpretation?.question || row.original?.clarification || (!text(category)
       ? 'Уточните категорию товара и обязательные технические параметры.'
       : 'Уточните обязательные параметры товара.') : undefined,
   };

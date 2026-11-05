@@ -79,7 +79,14 @@ export function evaluateCharacteristics(requirements, characteristics, ref) {
     // Validate the expected representation even when the provider omitted the field.
     check({ value: null, unit: null }, test);
     const facts = characteristics.filter(item => text(item.name) === text(field));
-    const outcomes = facts.map(fact => check(fact, test));
+    const labelUnit = /\(([^()]+)\)\s*$/u.exec(field)?.[1];
+    const namedUnit = labelUnit && unit(labelUnit);
+    const outcomes = facts.map(fact => {
+      if (test.kind !== 'number' || !namedUnit) return check(fact, test);
+      const explicitUnit = text(fact.unit) && unit(fact.unit);
+      if (text(fact.unit) && (!explicitUnit || explicitUnit[0] !== namedUnit[0] || explicitUnit[1] !== namedUnit[1])) return 'UNKNOWN';
+      return check({ ...fact, unit: text(fact.unit) ? fact.unit : labelUnit }, test);
+    });
     const sameRepresentation = new Set(facts.map(fact => JSON.stringify([text(fact.value), text(fact.unit)]))).size <= 1;
     const status = outcomes.length && outcomes.every(value => value === 'PASS') ? 'PASS' :
       outcomes.length && outcomes.every(value => value === 'FAIL') && sameRepresentation ? 'FAIL' : 'UNKNOWN';
