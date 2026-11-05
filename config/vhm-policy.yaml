@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "1.0.0",
+  "revision": "0.1.0",
+  "status": "draft",
+  "search": {
+    "regionId": "moscow",
+    "candidateDepth": 4,
+    "maxCallsPerRow": 8,
+    "deadlineMs": 30000,
+    "routes": {
+      "A": [
+        "WEB_DOMAIN",
+        "MCP_VERIFY",
+        "DETERMINISTIC_ACCEPTANCE"
+      ],
+      "B": [
+        "MCP_TEXT",
+        "MCP_VERIFY",
+        "DETERMINISTIC_ACCEPTANCE"
+      ],
+      "C": [
+        "MCP_TEXT",
+        "WEB_DOMAIN_RECOVERY",
+        "MCP_VERIFY",
+        "DETERMINISTIC_ACCEPTANCE"
+      ]
+    },
+    "recovery": [
+      "BRAND_MODEL",
+      "MPN_TEXT",
+      "BRAND_MPN",
+      "NORMALIZED_NAME",
+      "REQUIRED_ATTRIBUTES",
+      "WEB_DOMAIN"
+    ]
+  },
+  "matching": {
+    "acceptanceProfileId": "vi-deterministic-1.1.0",
+    "requireMcpCardVerification": true,
+    "strictBeforeAnalog": true,
+    "requireAnalogDiscoveryApproval": true,
+    "requireSpecificAnalogApproval": true
+  },
+  "commercial": {
+    "preferredBrandIds": [
+      "inforce",
+      "gigant",
+      "aeg",
+      "ryobi",
+      "keyang",
+      "grizzly",
+      "atlet",
+      "kendo",
+      "dca"
+    ],
+    "unresolvedLabels": [
+      "Tiyang"
+    ],
+    "eligibleModes": [
+      "OPEN_SPEC",
+      "APPROVED_ANALOG"
+    ]
+  },
+  "providers": [
+    "vi-mcp-codex",
+    "codex-web-domain"
+  ],
+  "safety": {
+    "catalogHosts": [
+      "vseinstrumenti.ru",
+      "www.vseinstrumenti.ru"
+    ],
+    "respectProviderAccessLimits": true,
+    "allowInlineSecrets": false,
+    "credentialSource": "host-managed"
+  },
+  "approval": {
+    "actorId": "policy-working-group",
+    "parentRevision": null
+  }
+}

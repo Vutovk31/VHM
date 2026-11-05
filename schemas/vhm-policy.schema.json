@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VHM policy foundation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "revision",
+    "status",
+    "search",
+    "matching",
+    "commercial",
+    "providers",
+    "safety",
+    "approval"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0.0"
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "validated",
+        "approved",
+        "retired"
+      ]
+    },
+    "search": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "regionId",
+        "candidateDepth",
+        "maxCallsPerRow",
+        "deadlineMs",
+        "routes",
+        "recovery"
+      ],
+      "properties": {
+        "regionId": {
+          "enum": [
+            "moscow"
+          ]
+        },
+        "candidateDepth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "maxCallsPerRow": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 12
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 60000
+        },
+        "routes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "A",
+            "B",
+            "C"
+          ],
+          "properties": {
+            "A": {
+              "$ref": "#/$defs/route"
+            },
+            "B": {
+              "$ref": "#/$defs/route"
+            },
+            "C": {
+              "$ref": "#/$defs/route"
+            }
+          }
+        },
+        "recovery": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "BRAND_MODEL",
+              "MPN_TEXT",
+              "BRAND_MPN",
+              "NORMALIZED_NAME",
+              "REQUIRED_ATTRIBUTES",
+              "VI_SITE",
+              "WEB_DOMAIN",
+              "YANDEX_AUTHORIZED"
+            ]
+          }
+        }
+      }
+    },
+    "matching": {
+      "const": {
+        "acceptanceProfileId": "vi-deterministic-1.1.0",
+        "requireMcpCardVerification": true,
+        "strictBeforeAnalog": true,
+        "requireAnalogDiscoveryApproval": true,
+        "requireSpecificAnalogApproval": true
+      }
+    },
+    "commercial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preferredBrandIds",
+        "unresolvedLabels",
+        "eligibleModes"
+      ],
+      "properties": {
+        "preferredBrandIds": {
+          "type": "array",
+          "maxItems": 9,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "inforce",
+              "gigant",
+              "aeg",
+              "ryobi",
+              "keyang",
+              "grizzly",
+              "atlet",
+              "kendo",
+              "dca"
+            ]
+          }
+        },
+        "unresolvedLabels": {
+          "type": "array",
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[\\p{L}\\p{N}][\\p{L}\\p{N} -]{0,39}$"
+          }
+        },
+        "eligibleModes": {
+          "const": [
+            "OPEN_SPEC",
+            "APPROVED_ANALOG"
+          ]
+        }
+      }
+    },
+    "providers": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "vi-mcp-codex",
+          "codex-web-domain"
+        ]
+      }
+    },
+    "safety": {
+      "const": {
+        "catalogHosts": [
+          "vseinstrumenti.ru",
+          "www.vseinstrumenti.ru"
+        ],
+        "respectProviderAccessLimits": true,
+        "allowInlineSecrets": false,
+        "credentialSource": "host-managed"
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actorId",
+        "parentRevision"
+      ],
+      "properties": {
+        "actorId": {
+          "$ref": "#/$defs/id"
+        },
+        "parentRevision": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\d+\\.\\d+\\.\\d+$"
+            }
+          ]
+        },
+        "reviewerId": {
+          "$ref": "#/$defs/id"
+        },
+        "evidenceRef": {
+          "$ref": "#/$defs/id"
+        },
+        "approvedContentHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "route": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "WEB_DOMAIN",
+          "MCP_TEXT",
+          "WEB_DOMAIN_RECOVERY",
+          "MCP_VERIFY",
+          "DETERMINISTIC_ACCEPTANCE"
+        ]
+      }
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$"
+    }
+  }
+}
