@@ -62,7 +62,7 @@ const control = [
     counts[row.status] = (counts[row.status] ?? 0) + 1;
     return counts;
   }, Object.create(null))),
-  ...result.remarks.map(remark => ['Примечание к заявке', remark]),
+  ...result.remarks.map(remark => ['Примечание к заявке', typeof remark === 'string' ? remark : JSON.stringify(remark)]),
   ...result.rows.flatMap(row => row.attempts.map(attempt => [
     row.key, attempt.outcome, attempt.channel, attempt.query,
     [attempt.reason, ...(attempt.ids ?? [])].filter(Boolean).join(' · '),

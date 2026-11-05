@@ -64,12 +64,13 @@ export function parseRequestCsv(text, delimiter = ',') {
   });
 }
 
-export function normalizeRequest({ requestId, policyVersion, city = '', rows }) {
+export function normalizeRequest({ requestId, policyVersion, city = '', rows, remarks: sourceRemarks = [] }) {
   if (!tidy(requestId) || !tidy(policyVersion) || !Array.isArray(rows) || !rows.length) {
     throw new Error('Request ID, policy version and rows are required');
   }
   const seen = new Set();
-  const remarks = [];
+  if (!Array.isArray(sourceRemarks)) throw new Error('Request remarks must be an array');
+  const remarks = [...sourceRemarks];
   const normalized = rows.map((source, index) => {
     const line = source.line ?? index + 1;
     const location = tidy(source.location) || 'input';
