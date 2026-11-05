@@ -20,3 +20,10 @@ test('preserves explicit model suffix and deduplicates equivalent text queries',
   const result = plan({text:'Makita DTW285Z',brand:'Makita',model:'DTW285Z',siteProductId:'bad'});
   assert.deepEqual(result, { lookups:[], queries:[{strategy:'BRAND_MODEL',query:'Makita DTW285Z'}] });
 });
+
+test('unstructured identifier hints generate text recovery without a typed lookup', () => {
+  const result=plan({text:'Аккумуляторный гайковёрт Makita DTW285Z'});
+  assert.deepEqual(result.lookups,[]);
+  assert.equal(result.queries[0].query,'Makita DTW285Z');
+  assert.equal(result.queries[0].strategy,'SOURCE_IDENTIFIER_TEXT');
+});

@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
+import { extractProductText } from './normalize-product.mjs';
 
 const tidy = value => String(value ?? '').normalize('NFC').trim().replace(/\s+/gu, ' ');
 const units = new Map([
@@ -96,6 +97,7 @@ export function normalizeRequest({ requestId, policyVersion, city = '', rows, re
       key, number: source.number ?? line, location, line, text: source.text,
       group: tidy(source.group) || null, quantity, unit: unit || null, original: { ...source },
       product, requirements: source.requirements ?? [],
+      analysis: extractProductText(source.text),
     };
   });
   return { requestId, policyVersion, city: tidy(city), rows: normalized, remarks };

@@ -21,6 +21,10 @@ export function planSearch(row) {
     add('MPN_TEXT', [mpn]);
     if (brand) add('BRAND_MPN', [brand, mpn]);
   }
+  const suggestedBrand = brand || (row.analysis?.brands.length === 1 ? row.analysis.brands[0].value : '');
+  for (const hint of row.analysis?.identifiers ?? []) {
+    add('SOURCE_IDENTIFIER_TEXT', [suggestedBrand, hint.value]);
+  }
   add('NORMALIZED_NAME', [name]);
   const terms = row.requirements.map(requirement => requirement.value);
   if (category && terms.length) add('REQUIRED_ATTRIBUTES', [category, brand, ...terms]);

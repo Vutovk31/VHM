@@ -8,7 +8,8 @@ const routeChannels = {
 const provider = channel => channel === 'WEB' ? 'WEB' : 'MCP';
 
 function matcherRow(row) {
-  const { category, brand, model, mpn, viCode, siteProductId, series } = row.product;
+  const { brand, model, mpn, viCode, siteProductId, series } = row.product;
+  const category = row.product.category || row.analysis?.category?.value;
   const kind = row.original?.kind;
   const requirements = [...row.requirements];
   const clarify = !text(category) || requirements.length === 0 || kind === 'CLARIFY';
@@ -89,7 +90,7 @@ export async function runStrictWorkflow({ policy, snapshot, route, connectors = 
   for (let index = 0; index < intake.rows.length; index++) {
     const row = intake.rows[index];
     const record = evidence.rows[row.key] = { attempts: [], cards: [], candidateLocators: [] };
-    if (row.kind === 'CLARIFY') continue;
+    if (row.kind === 'CLARIFY' && !snapshot.rows[index].analysis?.category) continue;
     const signal = AbortSignal.timeout(deadlineMs);
     const seenLocators = new Set();
     const seenCards = new Set();

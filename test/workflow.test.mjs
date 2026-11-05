@@ -56,3 +56,16 @@ test('incomplete normalization returns a clarification without calling a provide
   assert.equal(calls,0);
   assert.equal(result.result.rows[0].status,'CLARIFICATION_REQUIRED');
 });
+
+test('automatic category and identifier hints permit discovery while technical acceptance remains unresolved', async () => {
+  const queries=[];
+  const result=await runStrictWorkflow({policy,snapshot:snapshot([{text:'Бур Brand M1',quantity:1,unit:'шт'}]),
+    route:'B',maxCallsPerRow:2,connectors:{
+      searchMcp:async({query})=>{queries.push(query);return [{siteProductId:'10'}]},
+      verifyMcp:async()=>[card],
+    }});
+  assert.ok(queries.length>0);
+  assert.equal(result.result.rows[0].status,'CLARIFICATION_REQUIRED');
+  assert.equal(result.result.metrics.exact,0);
+  assert.equal(Object.values(result.evidence.rows)[0].cards.length,1);
+});
