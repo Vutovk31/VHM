@@ -47,6 +47,39 @@ test('fails closed on incompatible requirements, model substitutions and web-onl
   assert.equal(run([strict], {[strict.key]: {cards: [{...card, verification: null}]}}).rows[0].status, 'EXACT_UNVERIFIED');
 });
 
+test('candidate diagnostics distinguish missing proof from incompatibility without changing acceptance', () => {
+  const row = {...strict, requirements: [{key: 'mount', value: 'SDS-plus'}]};
+  const unknown = {...card, checks: {mount: {status: 'UNKNOWN', ref: 'raw card'}}};
+  const wrong = {...card, siteProductId: '102', checks: {mount: {status: 'FAIL', ref: 'raw card'}}};
+  const passedWithoutProof = {...card, siteProductId: '103', checks: {mount: {status: 'PASS'}}};
+  const result = run([row], {[row.key]: {cards: [unknown, wrong, passedWithoutProof]}});
+  assert.equal(result.rows[0].status, 'NOT_FOUND');
+  const diagnostics = result.rows[0].candidateDiagnostics;
+  assert.deepEqual(diagnostics.map(item => item.reasons[0].code),
+    ['REQUIREMENT_NOT_VERIFIED', 'REQUIREMENT_MISMATCH', 'REQUIREMENT_NOT_VERIFIED']);
+  assert.equal(diagnostics[0].reasons[0].field, 'mount');
+  assert.equal(diagnostics[0].reasons[0].ref, 'raw card');
+  assert.ok(diagnostics.every(item => !item.selected));
+  assert.equal(result.metrics.exact, 0);
+  const accepted = run([row], {[row.key]: {cards: [unknown, wrong,
+    {...card, checks: {mount: {status: 'PASS', ref: 'confirmed mount'}}}]}});
+  assert.equal(accepted.rows[0].status, 'EXACT');
+  assert.equal(accepted.rows[0].candidateDiagnostics[2].selected, true);
+  assert.deepEqual(accepted.rows[0].candidateDiagnostics[2].reasons, []);
+});
+
+test('diagnostics expose missing identity, verification and open proposal prerequisites', () => {
+  const result = run([strict, open], {
+    [strict.key]: {cards: [{...card, model: undefined, verification: null}]},
+    [open.key]: {cards: [{...card, model: undefined, assumptions: undefined}]},
+  });
+  assert.deepEqual(result.rows.map(row => row.status), ['EXACT_UNVERIFIED', 'NOT_FOUND']);
+  assert.deepEqual(result.rows[0].candidateDiagnostics[0].reasons.map(r => r.code),
+    ['VERIFICATION_MISSING', 'IDENTITY_NOT_VERIFIED']);
+  assert.deepEqual(result.rows[1].candidateDiagnostics[0].reasons.map(r => r.code),
+    ['PROPOSAL_MODEL_MISSING', 'PROPOSAL_ASSUMPTIONS_MISSING']);
+});
+
 test('scoped permission resumes the same request and SKU approval is separate', () => {
   const evidence = {[strict.key]: {cards: [analog]}};
   assert.throws(() => run([strict], evidence), /lacks permission/);

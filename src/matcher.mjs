@@ -35,6 +35,35 @@ function checkRequirements(row, card, analog) {
   });
 }
 
+// Diagnostic only. Acceptance continues to use checkRequirements and exact below.
+function candidateDiagnostics(policy, row, candidate, permit) {
+  const reasons = [];
+  const add = (code, field, actual, expected, ref = null) =>
+    reasons.push({code, field, actual: actual ?? null, expected: expected ?? null, ref});
+  if (!verified(candidate, policy.catalogHost)) add('VERIFICATION_MISSING', 'verification', candidate.verification?.source, 'MCP_VERIFY', candidate.verification?.ref);
+  if (normalize(candidate.category) !== normalize(row.category)) add('CATEGORY_MISMATCH', 'category', candidate.category, row.category);
+  if (candidate.stage === 'ANALOG' && !permit) add('ANALOG_PERMISSION_MISSING', 'stage', candidate.stage, 'EXACT');
+  const analog = candidate.stage === 'ANALOG' && permit;
+  if (!analog) for (const field of ['brand', 'model', 'mpn']) {
+    if (present(row[field]) && normalize(row[field]) !== normalize(candidate[field]))
+      add(present(candidate[field]) ? 'IDENTITY_MISMATCH' : 'IDENTITY_NOT_VERIFIED', field, candidate[field], row[field], candidate.verification?.ref);
+  }
+  for (const requirement of row.requirements) {
+    const check = candidate.checks?.[requirement.key];
+    const pass = present(check?.ref) && (check.status === 'PASS' ||
+      (analog && requirement.replaceable === true && check.status === 'DEVIATION' && present(check.detail)));
+    if (!pass) add(check?.status === 'FAIL' && present(check.ref) ? 'REQUIREMENT_MISMATCH' : 'REQUIREMENT_NOT_VERIFIED',
+      requirement.key, check?.status, requirement.value, check?.ref);
+  }
+  if (row.kind === 'OPEN') {
+    if (!present(candidate.model)) add('PROPOSAL_MODEL_MISSING', 'model', candidate.model, 'documented model');
+    if (!present(candidate.assumptions)) add('PROPOSAL_ASSUMPTIONS_MISSING', 'assumptions', candidate.assumptions, 'explicit assumptions');
+  }
+  if (analog && !present(candidate.differences)) add('ANALOG_DIFFERENCES_MISSING', 'differences', candidate.differences, 'explicit differences');
+  return {siteProductId: candidate.siteProductId ?? null, stage: candidate.stage ?? null,
+    verificationRef: candidate.verification?.ref ?? null, reasons};
+}
+
 function orderQuantity(row, card) {
   if (present(row.quantityClarification)) return null;
   const pack = card?.pack;
@@ -107,6 +136,10 @@ function makeDecision(policy, row, record, permit, accepted, city) {
     reason: card && !supplyConfirmed ? 'DELIVERY_UNVERIFIED' :
       status === 'CLARIFICATION_REQUIRED' ? 'MISSING_REQUIREMENTS' : record.reason ?? status,
     partial: attempts.some(attempt => ['ERROR', 'UNAVAILABLE'].includes(attempt.outcome)),
+    candidateDiagnostics: (record.cards ?? []).map(candidate => ({
+      ...candidateDiagnostics(policy, row, candidate, permit),
+      selected: !!card && candidate === card,
+    })),
     attempts,
   };
 }
