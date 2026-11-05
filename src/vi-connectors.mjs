@@ -23,6 +23,8 @@ export function projectVerifiedProduct(raw, requirements, ref, observedAt = null
     { name: '@siteProductId', value: raw.id },
     ...(present(raw.sku) ? [{ name: '@viCode', value: raw.sku }] : []),
   ];
+  const packContents = characteristics.filter(item =>
+    item.name.trim().toLowerCase() === 'количество в упаковке');
   return {
     siteProductId: raw.id, viCode: raw.sku, title: raw.name, url: raw.url,
     category: analysis.category?.value ?? 'UNCLASSIFIED',
@@ -30,6 +32,7 @@ export function projectVerifiedProduct(raw, requirements, ref, observedAt = null
     stage: 'EXACT', characteristics,
     checks: evaluateCharacteristics(requirements, characteristics, ref),
     verification: { source: 'MCP_VERIFY', ref: ref },
+    ...(packContents.length ? { observedPackContents: { fields: packContents, ref } } : {}),
     stock: { status: raw.availability === 'in_stock' ? 'IN_STOCK_MCP' :
       raw.availability === 'out_of_stock' ? 'OUT_OF_STOCK' : 'UNKNOWN',
     city: 'Москва', ref: ref },
