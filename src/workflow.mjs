@@ -17,7 +17,10 @@ export function matcherRow(row) {
   const clarify = !text(category) || requirements.length === 0 || kind === 'CLARIFY';
   for (const [key, value] of Object.entries({ viCode, siteProductId, series })) {
     if (text(value) && !requirements.some(requirement => requirement.key === key)) {
-      requirements.push({ key, value });
+      requirements.push(key === 'series' ? { key, value } : {
+        key, value, field: key === 'viCode' ? '@viCode' : '@siteProductId',
+        test: { kind: 'text', expected: value },
+      });
     }
   }
   return {

@@ -47,6 +47,25 @@ export function createViConnectors({ invoke, persist, session }) {
     throw new Error('Host MCP preflight and durable evidence writer are required');
   }
   let active = false;
+  const saleTerms = new Map();
+  const reviewedTerms = session.reviewedSaleTerms ?? [];
+  if (!Array.isArray(reviewedTerms)) throw new Error('reviewedSaleTerms must be an array');
+  for (const entry of reviewedTerms) {
+    if (!validId(entry?.siteProductId) || !present(entry.viCode) || !present(entry.reviewedBy) ||
+        !present(entry.reviewedAt) || !Number.isFinite(Date.parse(entry.reviewedAt)) ||
+        !present(entry.sourceUnit) || !present(entry.orderUnit) ||
+        !Number.isFinite(entry.size) || entry.size <= 0 ||
+        !Number.isSafeInteger(entry.orderMultiple) || entry.orderMultiple <= 0 ||
+        !present(entry.url) || saleTerms.has(entry.siteProductId)) {
+      throw new Error('Invalid or duplicate reviewed sale terms');
+    }
+    const url = new URL(entry.url);
+    if (url.protocol !== 'https:' || !['www.vseinstrumenti.ru', 'vseinstrumenti.ru'].includes(url.hostname) ||
+        url.port || url.username || url.password || !url.pathname.startsWith('/product/')) {
+      throw new Error('Reviewed sale terms require an official VI product URL');
+    }
+    saleTerms.set(entry.siteProductId, entry);
+  }
 
   async function call(method, args, signal) {
     signal?.throwIfAborted();
@@ -119,7 +138,13 @@ export function createViConnectors({ invoke, persist, session }) {
       }
 
       return products.filter(raw => validId(raw.id) && present(raw.name)).map(raw => {
-        return projectVerifiedProduct(raw, requirements, response.ref, response.at);
+        const card = projectVerifiedProduct(raw, requirements, response.ref, response.at);
+        const terms = saleTerms.get(raw.id);
+        if (terms && terms.viCode === raw.sku && terms.url === raw.url) {
+          const { size, sourceUnit, orderUnit, orderMultiple, url, reviewedBy, reviewedAt } = terms;
+          card.pack = { size, sourceUnit, orderUnit, orderMultiple, ref: url, reviewedBy, reviewedAt };
+        }
+        return card;
       });
     },
   };
