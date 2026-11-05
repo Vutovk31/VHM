@@ -1,6 +1,7 @@
 import { match } from './matcher.mjs';
 import { planSearch } from './search-plan.mjs';
 import { evaluateCharacteristics } from './technical-checks.mjs';
+import { createHash } from 'node:crypto';
 
 const text = value => typeof value === 'string' && value.trim() !== '';
 const routeChannels = {
@@ -75,25 +76,24 @@ function finishBefore(promise, signal) {
  * Searches return locator arrays. verifyMcp returns Matcher card arrays with a
  * persisted MCP verification reference and structured checks for the requirements.
  */
-export async function runStrictWorkflow({ policy, snapshot, route, connectors = {},
-  maxCallsPerRow = 8, deadlineMs = 30_000, candidateDepth = 4 }) {
+async function executeWorkflow({ policy, snapshot, intake, evidence, route, connectors = {},
+  analogKeys = null, maxCallsPerRow = 8, deadlineMs = 30_000, candidateDepth = 4 }) {
   if (!Object.hasOwn(routeChannels, route)) throw new Error('Invalid search route');
   boundedValue(maxCallsPerRow, 2, 12, 'call budget');
   boundedValue(deadlineMs, 1, 60_000, 'deadline');
   boundedValue(candidateDepth, 1, 20, 'candidate depth');
 
-  const intake = { ...snapshot, rows: snapshot.rows.map(matcherRow) };
   for (const row of intake.rows) {
     evaluateCharacteristics(row.requirements.filter(requirement => requirement.test), [], 'requirement-validation');
   }
-  const evidence = { requestId: intake.requestId, policyVersion: intake.policyVersion,
-    route, rows: Object.create(null) };
   match(policy, intake, evidence); // Validate the whole request before outbound calls.
   const blocked = new Map();
 
   for (let index = 0; index < intake.rows.length; index++) {
     const row = intake.rows[index];
-    const record = evidence.rows[row.key] = { attempts: [], cards: [], candidateLocators: [] };
+    if (analogKeys && !analogKeys.has(row.key)) continue;
+    const record = evidence.rows[row.key] ??= { attempts: [], cards: [], candidateLocators: [] };
+    record.candidateLocators ??= [];
     if (row.kind === 'CLARIFY' && !snapshot.rows[index].analysis?.category) continue;
     const signal = AbortSignal.timeout(deadlineMs);
     const seenLocators = new Set();
@@ -101,7 +101,7 @@ export async function runStrictWorkflow({ policy, snapshot, route, connectors = 
     let calls = 0;
 
     async function call(channel, fn, payload) {
-      const attempt = { channel, at: new Date().toISOString(), city: intake.city, ...payload };
+      const attempt = { channel, phase: analogKeys ? 'ANALOG' : 'STRICT', at: new Date().toISOString(), city: intake.city, ...payload };
       record.attempts.push(attempt);
       if (signal.aborted || calls >= maxCallsPerRow || blocked.has(provider(channel)) || typeof fn !== 'function') {
         attempt.outcome = 'UNAVAILABLE';
@@ -140,20 +140,32 @@ export async function runStrictWorkflow({ policy, snapshot, route, connectors = 
       const cards = await call('MCP_VERIFY', connectors.verifyMcp, { candidates: locators,
         requirements: row.requirements, limit: locators.length });
       for (const card of cards.slice(0, locators.length)) {
-        if (!card || card.stage === 'ANALOG' || seenCards.has(card.siteProductId)) continue;
+        if (!card || (!analogKeys && card.stage === 'ANALOG') || seenCards.has(card.siteProductId)) continue;
         if (!locators.some(locator => Object.entries(locator).every(([key, value]) => card[key] === value))) continue;
         seenCards.add(card.siteProductId);
         const typed = row.requirements.filter(requirement => requirement.test);
         const checks = typed.length && text(card.verification?.ref) ? evaluateCharacteristics(
           typed, card.characteristics ?? [], card.verification.ref) : {};
-        record.cards.push({ ...card, checks: { ...card.checks, ...checks } });
+        if (analogKeys) {
+          for (const requirement of typed) {
+            if (requirement.replaceable === true && checks[requirement.key]?.status === 'FAIL') {
+              checks[requirement.key] = { ...checks[requirement.key], status: 'DEVIATION',
+                detail: JSON.stringify({ required: requirement.value, actual: checks[requirement.key].detail }) };
+            }
+          }
+        }
+        record.cards.push({ ...card, stage: analogKeys ? 'ANALOG' : card.stage,
+          checks: { ...card.checks, ...checks } });
       }
-      const singleEvidence = { ...evidence, rows: { [row.key]: record } };
-      const result = match(policy, { ...intake, rows: [row] }, singleEvidence).rows[0];
-      return result.status === 'EXACT' || result.status === 'PRODUCT_PROPOSED';
+      const result = match(policy, intake, evidence).rows[index];
+      return analogKeys ? result.status === 'ANALOG_PROPOSED' :
+        result.status === 'EXACT' || result.status === 'PRODUCT_PROPOSED';
     }
 
-    const plan = planSearch(snapshot.rows[index]);
+    const plan = analogKeys ? {
+      lookups: [], queries: [{ strategy: 'ANALOG_REQUIRED_ATTRIBUTES',
+        query: [row.category, ...row.requirements.filter(r => !r.replaceable).map(r => r.value)].join(' ') }],
+    } : planSearch(snapshot.rows[index]);
     const canRecoverOnWeb = route === 'C' && typeof connectors.searchWeb === 'function';
     if (route !== 'A' && plan.lookups.length && await verify(plan.lookups.map(({ kind, value }) => ({ [kind]: value })))) continue;
     let accepted = false;
@@ -177,4 +189,45 @@ export async function runStrictWorkflow({ policy, snapshot, route, connectors = 
     if (record.candidateLocators.length && !record.cards.length) record.reason = 'CARD_VERIFICATION_UNAVAILABLE';
   }
   return { intake, evidence, result: match(policy, intake, evidence) };
+}
+
+function runDigest(policy, intake, evidence) {
+  return createHash('sha256').update(JSON.stringify({ policy, intake, evidence })).digest('hex');
+}
+
+export async function runStrictWorkflow(options) {
+  const { policy, snapshot, route } = options;
+  const intake = { ...snapshot, rows: snapshot.rows.map(matcherRow) };
+  const evidence = { requestId: intake.requestId, policyVersion: intake.policyVersion,
+    route, rows: Object.create(null) };
+  const run = await executeWorkflow({ ...options, intake, evidence });
+  return { ...run, snapshot, phase: 'STRICT_COMPLETE',
+    digest: runDigest(policy, run.intake, run.evidence) };
+}
+
+/** Continues a completed strict run only for explicitly authorized unresolved rows. */
+export async function runAnalogWorkflow({ strictRun, permission, ...options }) {
+  const { policy } = options;
+  if (strictRun?.phase !== 'STRICT_COMPLETE' ||
+      strictRun.digest !== runDigest(policy, strictRun.intake, strictRun.evidence)) {
+    throw new Error('A verified strict run with the same policy is required');
+  }
+  const strictResult = match(policy, strictRun.intake, strictRun.evidence);
+  if (!permission || permission.requestId !== strictResult.requestId ||
+      permission.strictDigest !== strictRun.digest || !text(permission.by) ||
+      !text(permission.at) || !Number.isFinite(Date.parse(permission.at)) ||
+      !['STRICT_ONLY', 'ALLOW_ANALOG_DISCOVERY'].includes(permission.decision) ||
+      !Array.isArray(permission.keys) || new Set(permission.keys).size !== permission.keys.length ||
+      permission.keys.some(key => !strictResult.approvalNeeded.includes(key))) {
+    throw new Error('Invalid or stale scoped analog permission');
+  }
+  const evidence = structuredClone(strictRun.evidence);
+  evidence.analogPermission = structuredClone(permission);
+  if (permission.decision === 'STRICT_ONLY' || !permission.keys.length) {
+    return { ...strictRun, evidence, phase: 'STRICT_CLOSED', result: match(policy, strictRun.intake, evidence) };
+  }
+  const run = await executeWorkflow({ ...options, snapshot: strictRun.snapshot, intake: strictRun.intake,
+    evidence, route: options.route ?? strictRun.evidence.route, analogKeys: new Set(permission.keys) });
+  return { ...run, snapshot: strictRun.snapshot, phase: 'ANALOG_PROPOSALS_COMPLETE',
+    strictDigest: strictRun.digest };
 }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { normalizeRequest } from '../src/intake.mjs';
-import { runStrictWorkflow } from '../src/workflow.mjs';
+import { runStrictWorkflow, runAnalogWorkflow } from '../src/workflow.mjs';
 
 const policy = JSON.parse(readFileSync(new URL('../policy/vi.json', import.meta.url)));
 const source = {text:'Бур Brand M1',brand:'Brand',model:'M1',category:'бур',quantity:2,unit:'шт',
@@ -83,5 +83,71 @@ test('typed requirements are rechecked against raw characteristics before Matche
     const checked=Object.values(result.evidence.rows)[0].cards[0].checks.capacity;
     assert.equal(checked.ref,'fixture#response');
     assert.equal(checked.status,exact?'PASS':'FAIL');
+  }
+});
+
+test('analog workflow uses scoped approval, preserves strict evidence and never approves a replacement', async () => {
+  const strict=await runStrictWorkflow({policy,snapshot:snapshot([source,source]),route:'B',
+    connectors:{searchMcp:async()=>[]}});
+  const original=JSON.stringify(strict.evidence);
+  const key=strict.intake.rows[0].key;
+  const permission={requestId:strict.result.requestId,strictDigest:strict.digest,by:'manager',
+    at:'2026-11-05T12:00:00Z',decision:'ALLOW_ANALOG_DISCOVERY',keys:[key]};
+  let calls=0;
+  const run=await runAnalogWorkflow({policy,strictRun:strict,permission,connectors:{
+    searchMcp:async({query})=>{calls++;assert.equal(query,'бур SDS-plus');return [{siteProductId:'20'}]},
+    verifyMcp:async()=>[{...card,siteProductId:'20',url:'https://www.vseinstrumenti.ru/product/bur-20/',
+      brand:'Other',model:'M2',differences:'Другой бренд и модель, посадка подтверждена'}],
+  }});
+  assert.equal(calls,1);
+  assert.equal(run.phase,'ANALOG_PROPOSALS_COMPLETE');
+  assert.equal(run.result.rows[0].status,'ANALOG_PROPOSED');
+  assert.equal(run.result.rows[0].approval,'PENDING');
+  assert.equal(run.result.rows[1].status,'NOT_FOUND');
+  assert.equal(run.result.procurement.length,0);
+  assert.equal(JSON.stringify(strict.evidence),original);
+  assert.equal(run.evidence.rows[key].attempts.at(-1).phase,'ANALOG');
+});
+
+test('stale permissions, resolved rows and technical mismatches cannot authorize analog acceptance', async () => {
+  const strict=await runStrictWorkflow({policy,snapshot:snapshot([source]),route:'B',
+    connectors:{searchMcp:async()=>[]}});
+  const permission={requestId:strict.result.requestId,strictDigest:strict.digest,by:'manager',
+    at:'2026-11-05T12:00:00Z',decision:'ALLOW_ANALOG_DISCOVERY',keys:[strict.intake.rows[0].key]};
+  await assert.rejects(()=>runAnalogWorkflow({policy,strictRun:strict,permission:{...permission,strictDigest:'bad'}}),/permission/);
+  let calls=0;
+  const closed=await runAnalogWorkflow({policy,strictRun:strict,permission:{...permission,decision:'STRICT_ONLY'},
+    connectors:{searchMcp:async()=>{calls++;return []}}});
+  assert.equal(closed.phase,'STRICT_CLOSED');
+  assert.equal(calls,0);
+  const mismatch=await runAnalogWorkflow({policy,strictRun:strict,permission,connectors:{
+    searchMcp:async()=>[{siteProductId:'20'}],
+    verifyMcp:async()=>[{...card,siteProductId:'20',url:'https://www.vseinstrumenti.ru/product/bur-20/',
+      model:'M2',differences:'Другая посадка',checks:{mount:{status:'FAIL',ref:'fixture#mount'}}}],
+  }});
+  assert.notEqual(mismatch.result.rows[0].status,'ANALOG_PROPOSED');
+  const resolved=await runStrictWorkflow({policy,snapshot:snapshot([source]),route:'B',connectors:{
+    searchMcp:async()=>[{siteProductId:'10'}],verifyMcp:async()=>[card],
+  }});
+  await assert.rejects(()=>runAnalogWorkflow({policy,strictRun:resolved,permission:{
+    ...permission,strictDigest:resolved.digest,keys:[resolved.intake.rows[0].key]}}),/permission/);
+});
+
+test('only explicitly replaceable typed criteria can become a disclosed analog deviation', async () => {
+  for (const replaceable of [false,true]) {
+    const row={...source,requirements:[{key:'length',value:'Длина 125 мм',field:'Длина',
+      test:{kind:'number',expected:125,unit:'мм'},replaceable}]};
+    const strict=await runStrictWorkflow({policy,snapshot:snapshot([row]),route:'B',
+      connectors:{searchMcp:async()=>[]}});
+    const permission={requestId:strict.result.requestId,strictDigest:strict.digest,by:'manager',
+      at:'2026-11-05T12:00:00Z',decision:'ALLOW_ANALOG_DISCOVERY',keys:[strict.intake.rows[0].key]};
+    const run=await runAnalogWorkflow({policy,strictRun:strict,permission,connectors:{
+      searchMcp:async()=>[{siteProductId:'20'}],
+      verifyMcp:async()=>[{...card,siteProductId:'20',model:'M2',
+        url:'https://www.vseinstrumenti.ru/product/bur-20/',differences:'Длина 150 мм вместо 125 мм',
+        characteristics:[{name:'Длина',value:'150',unit:'мм'}]}],
+    }});
+    assert.equal(run.result.rows[0].status==='ANALOG_PROPOSED',replaceable);
+    assert.equal(run.result.rows[0].approval,replaceable?'PENDING':'NOT_REQUIRED');
   }
 });
