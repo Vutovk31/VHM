@@ -165,10 +165,11 @@ test('only explicitly replaceable typed criteria can become a disclosed analog d
     const run=await runAnalogWorkflow({policy,strictRun:strict,permission,connectors:{
       searchMcp:async()=>[{siteProductId:'20'}],
       verifyMcp:async()=>[{...card,siteProductId:'20',model:'M2',
-        url:'https://www.vseinstrumenti.ru/product/bur-20/',differences:'Длина 150 мм вместо 125 мм',
+        url:'https://www.vseinstrumenti.ru/product/bur-20/',
         characteristics:[{name:'Длина',value:'150',unit:'мм'}]}],
     }});
     assert.equal(run.result.rows[0].status==='ANALOG_PROPOSED',replaceable);
     assert.equal(run.result.rows[0].approval,replaceable?'PENDING':'NOT_REQUIRED');
+    if (replaceable) assert.match(run.result.rows[0].card.differences,/Длина.*125.*150/u);
   }
 });

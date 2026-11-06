@@ -159,15 +159,26 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
         const typed = row.requirements.filter(requirement => requirement.test);
         const checks = typed.length && text(card.verification?.ref) ? evaluateCharacteristics(
           typed, card.characteristics ?? [], card.verification.ref) : {};
+        const deviations = [];
         if (analogKeys) {
           for (const requirement of typed) {
             if (requirement.replaceable === true && checks[requirement.key]?.status === 'FAIL') {
+              const facts = JSON.parse(checks[requirement.key].detail);
+              const actual = facts.map(fact => [fact.value, fact.unit].filter(text).join(' ')).join(', ');
+              deviations.push(`${requirement.field}: требуется ${requirement.value}, в карточке ${actual}`);
               checks[requirement.key] = { ...checks[requirement.key], status: 'DEVIATION',
                 detail: JSON.stringify({ required: requirement.value, actual: checks[requirement.key].detail }) };
             }
           }
         }
         record.cards.push({ ...card, stage: analogKeys ? 'ANALOG' : card.stage,
+          ...(analogKeys && deviations.length && ['brand', 'model', 'mpn'].every(key => !text(row[key]) || text(card[key])) ? {
+            differences: [
+              ...deviations,
+              ...['brand', 'model', 'mpn'].filter(key => text(row[key]) && row[key] !== card[key])
+                .map(key => `${{brand:'Бренд',model:'Модель',mpn:'Артикул'}[key]}: ${row[key]} → ${card[key]}`),
+            ].join('\n'),
+          } : {}),
           ...(row.kind === 'OPEN' && text(card.model ?? card.observedModel) ? {
             model: card.model ?? card.observedModel,
             assumptions: card.assumptions || 'Модель и характеристики, которые не заданы в заявке, выбраны по карточке ВИ.',
