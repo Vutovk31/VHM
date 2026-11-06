@@ -42,6 +42,8 @@ test('MCP rate limit blocks further calls across rows and leaves the full result
   assert.equal(result.result.rows.length,2);
   assert.ok(result.result.rows.every(r=>r.status!=='EXACT'));
   assert.ok(Object.values(result.evidence.rows).every(r=>r.attempts.some(a=>a.reason==='rate_limited')));
+  assert.deepEqual(result.result.approvalNeeded,[]);
+  assert.deepEqual(result.result.strictRetryNeeded,result.result.rows.map(r=>r.key));
 });
 
 test('a row deadline does not disable MCP for subsequent rows', async () => {

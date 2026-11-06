@@ -197,6 +197,7 @@ export function match(policy, intake, evidence) {
   const procurement = [];
   const hunter = [];
   const approvalNeeded = [];
+  const strictRetryNeeded = [];
   for (const row of rows) {
     const closed = row.status === 'EXACT' || row.approval === 'APPROVED';
     groups.set(row.group, (groups.get(row.group) ?? true) && closed);
@@ -205,12 +206,17 @@ export function match(policy, intake, evidence) {
     }
     if (row.quantity && present(row.card?.title)) hunter.push(`${row.card.title} ${row.quantity} ${row.card.pack.orderUnit}`);
     if (row.kind === 'STRICT' && (row.status !== 'EXACT' || row.stock === 'OUT_OF_STOCK') &&
-        permit?.decision !== 'STRICT_ONLY' && !permit?.keys.includes(row.key)) approvalNeeded.push(row.key);
+        !permit?.keys.includes(row.key)) {
+      const incomplete = ['NOT_SEARCHED', 'EXACT_UNVERIFIED'].includes(row.status) ||
+        row.attempts.some(attempt => attempt.phase !== 'ANALOG' && ['ERROR', 'UNAVAILABLE'].includes(attempt.outcome));
+      if (incomplete) strictRetryNeeded.push(row.key);
+      else if (permit?.decision !== 'STRICT_ONLY') approvalNeeded.push(row.key);
+    }
   }
   const closedGroups = [...groups.values()].filter(Boolean).length;
   return {
     requestId: intake.requestId, policyVersion: policy.version, city: intake.city ?? '',
-    remarks: intake.remarks ?? [], rows, procurement, hunter, approvalNeeded,
+    remarks: intake.remarks ?? [], rows, procurement, hunter, approvalNeeded, strictRetryNeeded,
     metrics: {
       sourceRows: intake.rows.length, reportedRows: rows.length, groups: groups.size, closedGroups,
       coverage: closedGroups / groups.size, target: policy.coverageTarget,

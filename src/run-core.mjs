@@ -84,4 +84,5 @@ await writeFile(join(directory,'result-'+checkpoint.revision+'.json'),
   JSON.stringify({ ...run.result, execution: run.execution },null,2),{flag:'wx'});
 if (process.env.VHM_EXPORT_XLSX === '1') await exportRevision(checkpoint);
 console.log(JSON.stringify({requestId:run.intake.requestId,revision:checkpoint.revision,
- phase:run.phase,metrics:run.result.metrics,approvalNeeded:run.result.approvalNeeded}));
+ phase:run.phase,metrics:run.result.metrics,approvalNeeded:run.result.approvalNeeded,
+ strictRetryNeeded:run.result.strictRetryNeeded}));
