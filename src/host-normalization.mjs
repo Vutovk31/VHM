@@ -136,11 +136,17 @@ export function applyInterpretation(snapshot, response, request = buildInterpret
 
 export async function interpretThroughHost(snapshot, transport, signal) {
   const request = buildInterpretationRequest(snapshot);
-  if (!request.rows.length) return snapshot;
-  const result = await transport.invoke('normalize_request', request, {signal});
-  const response = result?.structuredContent;
-  const ref = await transport.persist({method:'normalize_request',at:new Date().toISOString(),request,response});
-  if (!present(ref)) throw new Error('Host interpretation evidence reference is required');
-  const output = applyInterpretation(snapshot,response,request);
-  return {...output,remarks:[...output.remarks,{code:'HOST_TECHNICAL_INTERPRETATION',ref}]};
+  const batchSize = 20;
+  let output = snapshot;
+  for (let offset = 0; offset < request.rows.length; offset += batchSize) {
+    signal?.throwIfAborted();
+    const batch = {...request, rows:request.rows.slice(offset,offset+batchSize)};
+    const result = await transport.invoke('normalize_request', batch, {signal});
+    const response = result?.structuredContent;
+    const ref = await transport.persist({method:'normalize_request',at:new Date().toISOString(),request:batch,response});
+    if (!present(ref)) throw new Error('Host interpretation evidence reference is required');
+    output = applyInterpretation(output,response,batch);
+    output.remarks = [...output.remarks,{code:'HOST_TECHNICAL_INTERPRETATION',ref}];
+  }
+  return output;
 }
