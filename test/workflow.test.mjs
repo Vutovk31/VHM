@@ -27,6 +27,10 @@ test('hybrid recovers a strict item automatically, preserves duplicate rows and 
   assert.equal(result.result.metrics.reportedRows,2);
   assert.deepEqual(order,['MCP','VERIFY','WEB','VERIFY','MCP','VERIFY','WEB','VERIFY']);
   assert.ok(Object.values(result.evidence.rows).every(r=>r.attempts.length===4));
+  assert.equal(result.execution.limits.maxCallsPerRow,4);
+  assert.deepEqual(result.execution.rowTimings.map(r=>r.key),result.result.rows.map(r=>r.key));
+  assert.deepEqual(result.execution.rowTimings.map(r=>r.calls),[4,4]);
+  assert.ok(result.execution.elapsedMs >= result.execution.rowTimings.reduce((sum,r)=>sum+r.elapsedMs,0));
 });
 
 test('MCP rate limit blocks further calls across rows and leaves the full result explicit', async () => {
@@ -55,6 +59,7 @@ test('incomplete normalization returns a clarification without calling a provide
     route:'C',connectors:{searchMcp:async()=>{calls++;return []}}});
   assert.equal(calls,0);
   assert.equal(result.result.rows[0].status,'CLARIFICATION_REQUIRED');
+  assert.deepEqual(result.execution.rowTimings,[]);
 });
 
 test('automatic category and identifier hints permit discovery while technical acceptance remains unresolved', async () => {

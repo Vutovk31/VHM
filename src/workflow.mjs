@@ -85,6 +85,9 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
   boundedValue(maxCallsPerRow, 2, 12, 'call budget');
   boundedValue(deadlineMs, 1, 60_000, 'deadline');
   boundedValue(candidateDepth, 1, 20, 'candidate depth');
+  const startedAt = new Date().toISOString();
+  const runStarted = performance.now();
+  const rowTimings = [];
 
   for (const row of intake.rows) {
     evaluateCharacteristics(row.requirements.filter(requirement => requirement.test), [], 'requirement-validation');
@@ -102,6 +105,7 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
     const seenLocators = new Set();
     const seenCards = new Set();
     let calls = 0;
+    const rowStarted = performance.now();
 
     async function call(channel, fn, payload) {
       const attempt = { channel, phase: analogKeys ? 'ANALOG' : 'STRICT', at: new Date().toISOString(), city: intake.city, ...payload };
@@ -171,33 +175,41 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
         result.status === 'EXACT' || result.status === 'PRODUCT_PROPOSED';
     }
 
-    const plan = analogKeys ? {
-      lookups: [], queries: [{ strategy: 'ANALOG_REQUIRED_ATTRIBUTES',
-        query: [row.category, ...row.requirements.filter(r => !r.replaceable).map(r => r.value)].join(' ') }],
-    } : planSearch(snapshot.rows[index]);
-    const canRecoverOnWeb = route === 'C' && typeof connectors.searchWeb === 'function';
-    if (route !== 'A' && plan.lookups.length && await verify(plan.lookups.map(({ kind, value }) => ({ [kind]: value })))) continue;
-    let accepted = false;
-    for (const channel of routeChannels[route]) {
-      const fn = channel === 'WEB' ? connectors.searchWeb : connectors.searchMcp;
-      const budget = channel === 'MCP_TEXT' && canRecoverOnWeb ? Math.max(2, maxCallsPerRow - 2) : maxCallsPerRow;
-      for (const variant of plan.queries) {
-        if (calls >= budget || signal.aborted || blocked.has('MCP')) break;
-        const candidates = await call(channel, fn, { ...variant, limit: candidateDepth });
-        if (await verify(candidates)) {
-          accepted = true;
-          break;
+    try {
+      const plan = analogKeys ? {
+        lookups: [], queries: [{ strategy: 'ANALOG_REQUIRED_ATTRIBUTES',
+          query: [row.category, ...row.requirements.filter(r => !r.replaceable).map(r => r.value)].join(' ') }],
+      } : planSearch(snapshot.rows[index]);
+      const canRecoverOnWeb = route === 'C' && typeof connectors.searchWeb === 'function';
+      if (route !== 'A' && plan.lookups.length && await verify(plan.lookups.map(({ kind, value }) => ({ [kind]: value })))) continue;
+      let accepted = false;
+      for (const channel of routeChannels[route]) {
+        const fn = channel === 'WEB' ? connectors.searchWeb : connectors.searchMcp;
+        const budget = channel === 'MCP_TEXT' && canRecoverOnWeb ? Math.max(2, maxCallsPerRow - 2) : maxCallsPerRow;
+        for (const variant of plan.queries) {
+          if (calls >= budget || signal.aborted || blocked.has('MCP')) break;
+          const candidates = await call(channel, fn, { ...variant, limit: candidateDepth });
+          if (await verify(candidates)) {
+            accepted = true;
+            break;
+          }
+          if (!fn || blocked.has(provider(channel))) break;
         }
-        if (!fn || blocked.has(provider(channel))) break;
+        if (accepted) break;
       }
-      if (accepted) break;
+      if (blocked.has('MCP') && !record.attempts.some(attempt => attempt.reason === blocked.get('MCP'))) {
+        record.attempts.push({ channel: 'MCP_VERIFY', outcome: 'UNAVAILABLE', reason: blocked.get('MCP') });
+      }
+      if (record.candidateLocators.length && !record.cards.length) record.reason = 'CARD_VERIFICATION_UNAVAILABLE';
+    } finally {
+      rowTimings.push({ key: row.key, elapsedMs: performance.now() - rowStarted, calls });
     }
-    if (blocked.has('MCP') && !record.attempts.some(attempt => attempt.reason === blocked.get('MCP'))) {
-      record.attempts.push({ channel: 'MCP_VERIFY', outcome: 'UNAVAILABLE', reason: blocked.get('MCP') });
-    }
-    if (record.candidateLocators.length && !record.cards.length) record.reason = 'CARD_VERIFICATION_UNAVAILABLE';
   }
-  return { intake, evidence, result: match(policy, intake, evidence) };
+  const result = match(policy, intake, evidence);
+  return { intake, evidence, result, execution: {
+    startedAt, elapsedMs: performance.now() - runStarted,
+    limits: { maxCallsPerRow, deadlineMs, candidateDepth }, rowTimings,
+  } };
 }
 
 function runDigest(policy, intake, evidence) {

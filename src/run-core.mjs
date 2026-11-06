@@ -36,6 +36,7 @@ if (permissionFile) {
   run = await runStrictWorkflow({policy,snapshot,route,connectors,...limits});
 }
 const checkpoint = await saveRun(directory,run,prior?.revision??0);
-await writeFile(join(directory,'result-'+checkpoint.revision+'.json'),JSON.stringify(run.result,null,2),{flag:'wx'});
+await writeFile(join(directory,'result-'+checkpoint.revision+'.json'),
+  JSON.stringify({ ...run.result, execution: run.execution },null,2),{flag:'wx'});
 console.log(JSON.stringify({requestId:run.intake.requestId,revision:checkpoint.revision,
  phase:run.phase,metrics:run.result.metrics,approvalNeeded:run.result.approvalNeeded}));
