@@ -25,10 +25,15 @@ export function projectVerifiedProduct(raw, requirements, ref, observedAt = null
   ];
   const packContents = characteristics.filter(item =>
     item.name.trim().toLowerCase() === 'количество в упаковке');
+  const brand = analysis.brands.length === 1 ? analysis.brands[0] : null;
+  const suffix = brand ? raw.name.slice(brand.source.end).trim() : '';
+  // A brand followed by a single mixed letter/digit identifier is a bounded title pattern.
+  const model = /^(?=[a-z0-9-]*[a-z])(?=[a-z0-9-]*\d)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/iu.test(suffix)
+    ? suffix : undefined;
   return {
     siteProductId: raw.id, viCode: raw.sku, title: raw.name, url: raw.url,
     category: analysis.category?.value ?? 'UNCLASSIFIED',
-    brand: analysis.brands.length === 1 ? analysis.brands[0].value : undefined,
+    brand: brand?.value, observedModel: model,
     stage: 'EXACT', characteristics,
     checks: evaluateCharacteristics(requirements, characteristics, ref),
     verification: { source: 'MCP_VERIFY', ref: ref },

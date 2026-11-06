@@ -168,6 +168,10 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
           }
         }
         record.cards.push({ ...card, stage: analogKeys ? 'ANALOG' : card.stage,
+          ...(row.kind === 'OPEN' && text(card.model ?? card.observedModel) ? {
+            model: card.model ?? card.observedModel,
+            assumptions: card.assumptions || 'Модель и характеристики, которые не заданы в заявке, выбраны по карточке ВИ.',
+          } : {}),
           checks: { ...card.checks, ...checks } });
       }
       const result = match(policy, intake, evidence).rows[index];
