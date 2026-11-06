@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, open, rename, unlink } from 'node:fs/promises
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-const phases = new Set(['STRICT_COMPLETE', 'STRICT_CLOSED', 'ANALOG_PROPOSALS_COMPLETE']);
+const phases = new Set(['STRICT_COMPLETE', 'STRICT_CLOSED', 'ANALOG_PROPOSALS_COMPLETE', 'PRODUCT_APPROVAL_RECORDED']);
 
 export async function loadRun(directory) {
   let entries;

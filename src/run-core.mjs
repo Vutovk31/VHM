@@ -7,33 +7,53 @@ import { createHostTransport } from './host-transport.mjs';
 import { createViConnectors } from './vi-connectors.mjs';
 import { createWebConnector } from './web-connector.mjs';
 import { interpretThroughHost } from './host-normalization.mjs';
+import { match } from './matcher.mjs';
 
 const [input, outputDirectory, route, sessionFile, permissionFile] = process.argv.slice(2);
-if (!input || !outputDirectory || !['A','B','C'].includes(route) || !sessionFile) {
-  throw new Error('Usage: node src/run-core.mjs input.json output-directory A|B|C host-session.json [permission.json]');
+const approving = input === '--approve';
+if (!input || !outputDirectory || (approving ? !route || sessionFile : !['A','B','C'].includes(route) || !sessionFile)) {
+  throw new Error('Usage: node src/run-core.mjs input.json output-directory A|B|C host-session.json [permission.json]\n' +
+    '       node src/run-core.mjs --approve output-directory approval.json');
 }
 const read = async path => JSON.parse((await readFile(path,'utf8')).replace(/^\uFEFF/u,''));
 const directory = resolve(outputDirectory);
 await mkdir(directory,{recursive:true});
 const policy = await read(new URL('../policy/vi.json',import.meta.url));
-const transport = await createHostTransport(join(directory,'host'));
-const session = await read(sessionFile);
-const connectors = { ...createViConnectors({...transport,session}),
-  ...createWebConnector(transport) };
-const limits = { deadlineMs: Number(process.env.VHM_HOST_DEADLINE_MS ?? 30_000) };
 const prior = await loadRun(directory);
 let run;
-if (permissionFile) {
-  if (!prior) throw new Error('Saved strict run is required for analog continuation');
-  run = await runAnalogWorkflow({policy,strictRun:prior.run,permission:await read(permissionFile),route,connectors,...limits});
-} else {
-  if (prior) throw new Error('A checkpoint already exists. Resume it or choose a new request directory');
-  const source = await read(input);
-  let snapshot = source.rows?.[0]?.product ? source : normalizeRequest(source);
-  if (session.technicalNormalization === true) {
-    snapshot = await interpretThroughHost(snapshot, transport, AbortSignal.timeout(300_000));
+if (approving) {
+  const { revision, ...approval } = await read(route);
+  const saved = prior?.run;
+  if (saved?.phase === 'STRICT_COMPLETE' && saved.result.approvalNeeded.length) {
+    throw new Error('Record the strict-only decision or finish analog discovery before approving a SKU');
   }
-  run = await runStrictWorkflow({policy,snapshot,route,connectors,...limits});
+  const proposal = saved?.result.rows.find(row => row.key === approval.key);
+  if (!prior || revision !== prior.revision || proposal?.approval !== 'PENDING' ||
+      proposal.card?.siteProductId !== approval.siteProductId ||
+      !Number.isFinite(Date.parse(approval.at))) {
+    throw new Error('Approval must reference the current revision and its pending SKU');
+  }
+  const evidence = { ...saved.evidence, approvals: [...(saved.evidence.approvals ?? []), approval] };
+  run = { ...saved, evidence, phase: 'PRODUCT_APPROVAL_RECORDED',
+    result: match(policy, saved.intake, evidence) };
+} else {
+  const transport = await createHostTransport(join(directory,'host'));
+  const session = await read(sessionFile);
+  const connectors = { ...createViConnectors({...transport,session}),
+    ...createWebConnector(transport) };
+  const limits = { deadlineMs: Number(process.env.VHM_HOST_DEADLINE_MS ?? 30_000) };
+  if (permissionFile) {
+    if (!prior) throw new Error('Saved strict run is required for analog continuation');
+    run = await runAnalogWorkflow({policy,strictRun:prior.run,permission:await read(permissionFile),route,connectors,...limits});
+  } else {
+    if (prior) throw new Error('A checkpoint already exists. Resume it or choose a new request directory');
+    const source = await read(input);
+    let snapshot = source.rows?.[0]?.product ? source : normalizeRequest(source);
+    if (session.technicalNormalization === true) {
+      snapshot = await interpretThroughHost(snapshot, transport, AbortSignal.timeout(300_000));
+    }
+    run = await runStrictWorkflow({policy,snapshot,route,connectors,...limits});
+  }
 }
 const checkpoint = await saveRun(directory,run,prior?.revision??0);
 await writeFile(join(directory,'result-'+checkpoint.revision+'.json'),
