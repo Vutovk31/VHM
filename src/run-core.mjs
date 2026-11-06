@@ -11,15 +11,28 @@ import { match } from './matcher.mjs';
 
 const [input, outputDirectory, route, sessionFile, permissionFile] = process.argv.slice(2);
 const approving = input === '--approve';
-if (!input || !outputDirectory || (approving ? !route || sessionFile : !['A','B','C'].includes(route) || !sessionFile)) {
+const exporting = input === '--export';
+if (!input || !outputDirectory || (exporting ? route : approving ? !route || sessionFile : !['A','B','C'].includes(route) || !sessionFile)) {
   throw new Error('Usage: node src/run-core.mjs input.{json,csv,xlsx} output-directory A|B|C host-session.json [permission.json]\n' +
-    '       node src/run-core.mjs --approve output-directory approval.json');
+    '       node src/run-core.mjs --approve output-directory approval.json\n' +
+    '       node src/run-core.mjs --export output-directory');
 }
 const read = async path => JSON.parse((await readFile(path,'utf8')).replace(/^\uFEFF/u,''));
 const directory = resolve(outputDirectory);
 await mkdir(directory,{recursive:true});
 const policy = await read(new URL('../policy/vi.json',import.meta.url));
 const prior = await loadRun(directory);
+async function exportRevision(checkpoint) {
+  const { exportResult } = await import('./export.mjs');
+  const reportDirectory = join(directory, 'report-' + checkpoint.revision);
+  await mkdir(reportDirectory, { recursive: true });
+  await exportResult(checkpoint.run.result, join(reportDirectory, 'report.xlsx'));
+}
+if (exporting) {
+  if (!prior) throw new Error('Saved run required for export');
+  await exportRevision(prior);
+  process.exit(0);
+}
 let run;
 if (approving) {
   const { revision, ...approval } = await read(route);
@@ -69,5 +82,6 @@ if (approving) {
 const checkpoint = await saveRun(directory,run,prior?.revision??0);
 await writeFile(join(directory,'result-'+checkpoint.revision+'.json'),
   JSON.stringify({ ...run.result, execution: run.execution },null,2),{flag:'wx'});
+if (process.env.VHM_EXPORT_XLSX === '1') await exportRevision(checkpoint);
 console.log(JSON.stringify({requestId:run.intake.requestId,revision:checkpoint.revision,
  phase:run.phase,metrics:run.result.metrics,approvalNeeded:run.result.approvalNeeded}));
