@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { normalizeRequest } from './intake.mjs';
+import { extname, join, resolve } from 'node:path';
+import { normalizeRequest, parseRequestCsv } from './intake.mjs';
 import { runStrictWorkflow, runAnalogWorkflow } from './workflow.mjs';
 import { loadRun, saveRun } from './run-store.mjs';
 import { createHostTransport } from './host-transport.mjs';
@@ -12,7 +12,7 @@ import { match } from './matcher.mjs';
 const [input, outputDirectory, route, sessionFile, permissionFile] = process.argv.slice(2);
 const approving = input === '--approve';
 if (!input || !outputDirectory || (approving ? !route || sessionFile : !['A','B','C'].includes(route) || !sessionFile)) {
-  throw new Error('Usage: node src/run-core.mjs input.json output-directory A|B|C host-session.json [permission.json]\n' +
+  throw new Error('Usage: node src/run-core.mjs input.{json,csv,xlsx} output-directory A|B|C host-session.json [permission.json]\n' +
     '       node src/run-core.mjs --approve output-directory approval.json');
 }
 const read = async path => JSON.parse((await readFile(path,'utf8')).replace(/^\uFEFF/u,''));
@@ -47,8 +47,19 @@ if (approving) {
     run = await runAnalogWorkflow({policy,strictRun:prior.run,permission:await read(permissionFile),route,connectors,...limits});
   } else {
     if (prior) throw new Error('A checkpoint already exists. Resume it or choose a new request directory');
-    const source = await read(input);
-    let snapshot = source.rows?.[0]?.product ? source : normalizeRequest(source);
+    let snapshot;
+    const extension = extname(input).toLowerCase();
+    if (extension === '.csv') {
+      const { requestId, city, delimiter } = session.input ?? {};
+      const rows = parseRequestCsv(await readFile(input, 'utf8'), delimiter);
+      snapshot = normalizeRequest({ requestId, city, policyVersion: policy.version, rows });
+    } else if (extension === '.xlsx') {
+      const { loadWorkbookIntake } = await import('./intake-xlsx.mjs');
+      snapshot = await loadWorkbookIntake(input, { ...session.input, policyVersion: policy.version });
+    } else {
+      const source = await read(input);
+      snapshot = source.rows?.[0]?.product ? source : normalizeRequest(source);
+    }
     if (session.technicalNormalization === true) {
       snapshot = await interpretThroughHost(snapshot, transport, AbortSignal.timeout(300_000));
     }

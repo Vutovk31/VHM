@@ -74,14 +74,18 @@ export function workbookIntake(workbook, { sheets, ...context }) {
   return snapshot;
 }
 
+export async function loadWorkbookIntake(input, mapping) {
+  const { FileBlob, SpreadsheetFile } = await import('@oai/artifact-tool');
+  const workbook = await SpreadsheetFile.importXlsx(await FileBlob.load(input));
+  return workbookIntake(workbook, mapping);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [input, mappingPath, output] = process.argv.slice(2);
   if (!input || !mappingPath || !output) {
     throw new Error('Usage: node src/intake-xlsx.mjs input.xlsx mapping.json output.json');
   }
-  const { FileBlob, SpreadsheetFile } = await import('@oai/artifact-tool');
-  const workbook = await SpreadsheetFile.importXlsx(await FileBlob.load(input));
   const mapping = JSON.parse(readFileSync(mappingPath, 'utf8').replace(/^\uFEFF/u, ''));
-  const snapshot = workbookIntake(workbook, mapping);
+  const snapshot = await loadWorkbookIntake(input, mapping);
   writeFileSync(output, JSON.stringify(snapshot, null, 2), { flag: 'wx' });
 }
