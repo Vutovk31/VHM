@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { normalizeRequest, parseRequestCsv } from './intake.mjs';
-import { runStrictWorkflow, runAnalogWorkflow } from './workflow.mjs';
+import { runStrictWorkflow, runAnalogWorkflow, resumeStrictWorkflow } from './workflow.mjs';
 import { loadRun, saveRun } from './run-store.mjs';
 import { createHostTransport } from './host-transport.mjs';
 import { createViConnectors } from './vi-connectors.mjs';
@@ -12,10 +12,12 @@ import { match } from './matcher.mjs';
 const [input, outputDirectory, route, sessionFile, permissionFile] = process.argv.slice(2);
 const approving = input === '--approve';
 const exporting = input === '--export';
-if (!input || !outputDirectory || (exporting ? route : approving ? !route || sessionFile : !['A','B','C'].includes(route) || !sessionFile)) {
+const resuming = input === '--resume';
+if (!input || !outputDirectory || (exporting ? route : approving || resuming ? !route || sessionFile : !['A','B','C'].includes(route) || !sessionFile)) {
   throw new Error('Usage: node src/run-core.mjs input.{json,csv,xlsx} output-directory A|B|C host-session.json [permission.json]\n' +
     '       node src/run-core.mjs --approve output-directory approval.json\n' +
-    '       node src/run-core.mjs --export output-directory');
+    '       node src/run-core.mjs --export output-directory\n' +
+    '       node src/run-core.mjs --resume output-directory host-session.json');
 }
 const read = async path => JSON.parse((await readFile(path,'utf8')).replace(/^\uFEFF/u,''));
 const directory = resolve(outputDirectory);
@@ -51,11 +53,13 @@ if (approving) {
     result: match(policy, saved.intake, evidence) };
 } else {
   const transport = await createHostTransport(join(directory,'host'));
-  const session = await read(sessionFile);
+  const session = await read(resuming ? route : sessionFile);
   const connectors = { ...createViConnectors({...transport,session}),
     ...createWebConnector(transport) };
   const limits = { deadlineMs: Number(process.env.VHM_HOST_DEADLINE_MS ?? 30_000) };
-  if (permissionFile) {
+  if (resuming) {
+    run = await resumeStrictWorkflow({ policy, strictRun: prior?.run, connectors, ...limits });
+  } else if (permissionFile) {
     if (!prior) throw new Error('Saved strict run is required for analog continuation');
     run = await runAnalogWorkflow({policy,strictRun:prior.run,permission:await read(permissionFile),route,connectors,...limits});
   } else {

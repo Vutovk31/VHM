@@ -80,7 +80,7 @@ function finishBefore(promise, signal) {
  * persisted MCP verification reference and structured checks for the requirements.
  */
 async function executeWorkflow({ policy, snapshot, intake, evidence, route, connectors = {},
-  analogKeys = null, maxCallsPerRow = 8, deadlineMs = 30_000, candidateDepth = 4 }) {
+  analogKeys = null, strictKeys = null, maxCallsPerRow = 8, deadlineMs = 30_000, candidateDepth = 4 }) {
   if (!Object.hasOwn(routeChannels, route)) throw new Error('Invalid search route');
   boundedValue(maxCallsPerRow, 2, 12, 'call budget');
   boundedValue(deadlineMs, 1, 60_000, 'deadline');
@@ -98,6 +98,7 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
   for (let index = 0; index < intake.rows.length; index++) {
     const row = intake.rows[index];
     if (analogKeys && !analogKeys.has(row.key)) continue;
+    if (strictKeys && !strictKeys.has(row.key)) continue;
     const record = evidence.rows[row.key] ??= { attempts: [], cards: [], candidateLocators: [] };
     record.candidateLocators ??= [];
     if (row.kind === 'CLARIFY' && !snapshot.rows[index].analysis?.category) continue;
@@ -239,6 +240,22 @@ export async function runStrictWorkflow(options) {
   const run = await executeWorkflow({ ...options, intake, evidence });
   return { ...run, snapshot, phase: 'STRICT_COMPLETE',
     digest: runDigest(policy, run.intake, run.evidence) };
+}
+
+export async function resumeStrictWorkflow({ strictRun, ...options }) {
+  const { policy } = options;
+  if (strictRun?.phase !== 'STRICT_COMPLETE' ||
+      strictRun.digest !== runDigest(policy, strictRun.intake, strictRun.evidence)) {
+    throw new Error('A verified strict revision with the same policy is required');
+  }
+  const { strictRetryNeeded } = match(policy, strictRun.intake, strictRun.evidence);
+  if (!strictRetryNeeded.length) throw new Error('No incomplete strict rows to resume');
+  const evidence = structuredClone(strictRun.evidence);
+  for (const key of strictRetryNeeded) delete evidence.rows[key];
+  const run = await executeWorkflow({ ...options, snapshot: strictRun.snapshot, intake: strictRun.intake,
+    evidence, route: evidence.route, strictKeys: new Set(strictRetryNeeded) });
+  return { ...run, snapshot: strictRun.snapshot, phase: 'STRICT_COMPLETE',
+    previousStrictDigest: strictRun.digest, digest: runDigest(policy, run.intake, run.evidence) };
 }
 
 /** Continues a completed strict run only for explicitly authorized unresolved rows. */

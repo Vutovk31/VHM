@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { normalizeRequest } from '../src/intake.mjs';
-import { runStrictWorkflow, runAnalogWorkflow } from '../src/workflow.mjs';
+import { runStrictWorkflow, runAnalogWorkflow, resumeStrictWorkflow } from '../src/workflow.mjs';
 
 const policy = JSON.parse(readFileSync(new URL('../policy/vi.json', import.meta.url)));
 const source = {text:'Бур Brand M1',brand:'Brand',model:'M1',category:'бур',quantity:2,unit:'шт',
@@ -60,6 +60,32 @@ test('a row deadline does not disable MCP for subsequent rows', async () => {
   });
   assert.equal(run.result.rows[0].attempts[0].reason, 'DEADLINE');
   assert.equal(run.result.rows[1].status, 'EXACT');
+});
+
+test('strict resume searches only failed rows and retains completed evidence', async () => {
+  let searches = 0;
+  const verifyMcp = async () => [card];
+  const strict = await runStrictWorkflow({
+    policy, snapshot: snapshot([source, source]), route: 'B',
+    connectors: {
+      searchMcp: async () => {
+        if (++searches === 2) throw new Error('Transport failure');
+        return [{siteProductId:'10'}];
+      },
+      verifyMcp,
+    },
+  });
+  const [first, second] = strict.result.rows;
+  assert.deepEqual(strict.result.strictRetryNeeded,[second.key]);
+  const resumed = await resumeStrictWorkflow({policy,strictRun:strict,connectors:{
+    searchMcp:async()=>[{siteProductId:'10'}],verifyMcp,
+  }});
+  assert.deepEqual(resumed.execution.rowTimings.map(row=>row.key),[second.key]);
+  assert.deepEqual(resumed.evidence.rows[first.key],strict.evidence.rows[first.key]);
+  assert.equal(strict.result.rows[1].status,'NOT_SEARCHED');
+  assert.deepEqual(resumed.result.rows.map(row=>row.status),['EXACT','EXACT']);
+  assert.deepEqual(resumed.result.strictRetryNeeded,[]);
+  assert.equal(resumed.previousStrictDigest,strict.digest);
 });
 
 test('verification cannot substitute unrelated identifiers or accept unverified cards', async () => {
