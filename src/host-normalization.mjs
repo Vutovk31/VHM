@@ -107,9 +107,18 @@ export function applyInterpretation(snapshot, response, request = buildInterpret
     const missing = [...sources].some(([field, raw]) => Array.from({length:raw.length},(_,i)=>i).some(i =>
       !covered.get(field).has(i) && !/[\s,.;:()[\]]/u.test(raw[i])));
     if ([...requirements.keys()].some(key => !bindings.has(key))) throw new Error('Ungrounded technical requirement');
+    const ambiguousSetCount = /^\s*набор\s+отв[её]рток(?!\p{L})/iu.test(row.text) &&
+      [...requirements.values()].some(item => normalize(item.field) === 'количество в наборе' &&
+        item.test.kind === 'number' &&
+        (bindings.get(item.key) ?? []).some(span => span.field === 'text' && /^\d+\s*шт\.?$/iu.test(span.text.trim()) &&
+          !/^\s*(?:предметов|предмета|позиций)(?!\p{L})/iu.test(row.text.slice(span.end))));
+    const question = review.question || (ambiguousSetCount
+      ? 'Указанное число относится ко всем предметам набора или только к изделиям указанного типа?'
+      : undefined);
     const clarify = row.original.kind === 'CLARIFY' || review.mode === 'CLARIFY' || unresolved || missing || !requirements.size ||
+      ambiguousSetCount ||
       row.analysis.brands.length > 1;
-    if (clarify && !present(review.question)) throw new Error('Unresolved interpretation requires a specific question');
+    if (clarify && !present(question)) throw new Error('Unresolved interpretation requires a specific question');
     reviewed.set(review.key, {
       ...row, product: {...row.product, category:review.category,
         brand:review.brand || row.product.brand || (row.analysis.brands.length===1?row.analysis.brands[0].value:'')},
@@ -118,7 +127,7 @@ export function applyInterpretation(snapshot, response, request = buildInterpret
       deliveryClarification: row.deliveryClarification || axisQuestions.DELIVERY.join('\n'),
       quoteClarification: row.quoteClarification || axisQuestions.QUOTE.join('\n'),
       interpretation:{actor:response.actor,sourceDigest:review.sourceDigest,complete:!clarify,
-        mode:clarify?'CLARIFY':review.mode,question:clarify?review.question:undefined,claims:review.claims},
+        mode:clarify?'CLARIFY':review.mode,question:clarify?question:undefined,claims:review.claims},
     });
   }
   if (reviewed.size !== requested.size) throw new Error('Host interpretation omitted source rows');
