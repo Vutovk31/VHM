@@ -129,7 +129,7 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
         attempt.outcome = 'ERROR';
         attempt.reason = providerError(error);
         attempt.elapsedMs = performance.now() - started;
-        blocked.set(provider(channel), attempt.reason);
+        if (attempt.reason !== 'DEADLINE') blocked.set(provider(channel), attempt.reason);
         return [];
       }
     }

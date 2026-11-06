@@ -44,6 +44,22 @@ test('MCP rate limit blocks further calls across rows and leaves the full result
   assert.ok(Object.values(result.evidence.rows).every(r=>r.attempts.some(a=>a.reason==='rate_limited')));
 });
 
+test('a row deadline does not disable MCP for subsequent rows', async () => {
+  let searches = 0;
+  const run = await runStrictWorkflow({
+    policy, snapshot: snapshot([source, source]), route: 'B', maxCallsPerRow: 2,
+    connectors: {
+      searchMcp: async () => {
+        if (++searches === 1) throw new DOMException('Row timed out', 'TimeoutError');
+        return [{siteProductId:'10'}];
+      },
+      verifyMcp: async () => [card],
+    },
+  });
+  assert.equal(run.result.rows[0].attempts[0].reason, 'DEADLINE');
+  assert.equal(run.result.rows[1].status, 'EXACT');
+});
+
 test('verification cannot substitute unrelated identifiers or accept unverified cards', async () => {
   const result=await runStrictWorkflow({policy,snapshot:snapshot([source]),route:'B',connectors:{
     searchMcp:async()=>[{siteProductId:'11'}],
