@@ -1,5 +1,11 @@
 # Maestro · VI Matcher
 
+Задание после возобновления цели — [VHM Goal Prompt 6.0](VHM_GOAL_PROMPT.md).
+Единые сценарии — [Matching Policy 3.0](policy/VHM_MATCHING_POLICY.md).
+Критерии готовности пользовательского прототипа — [Prototype Acceptance](policy/VHM_PROTOTYPE_ACCEPTANCE.md).
+Текущие результаты ниже являются evidence по частям этих критериев. Полный прототип требует проверки загрузки,
+автоматического добора и скачивания на целевой среде.
+
 Текущий backlog ведётся в [реестре VHM Core](maestro/VHM_WORKSTREAM_REGISTRY.md). [План программы](maestro/VHM_MASTER_ROADMAP.md) · [Критический путь](maestro/VHM_CRITICAL_PATH.md) · [Журнал](maestro/VHM_EXECUTION_LOG.md).
 
 Ниже сохранены результаты и статусы на момент циклов E01–E03.5. E03.6 остаётся обязательным этапом перед включением runtime.
