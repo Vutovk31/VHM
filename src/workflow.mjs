@@ -94,6 +94,7 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
   }
   match(policy, intake, evidence); // Validate the whole request before outbound calls.
   const blocked = new Map();
+  const verifiedDuplicates = new Map();
 
   for (let index = 0; index < intake.rows.length; index++) {
     const row = intake.rows[index];
@@ -107,6 +108,11 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
     const seenCards = new Set();
     let calls = 0;
     const rowStarted = performance.now();
+    const searchPlan = analogKeys ? null : planSearch(snapshot.rows[index]);
+    const duplicateKey = !analogKeys && row.kind === 'STRICT' ? JSON.stringify([
+      row.category, row.brand, row.model, row.mpn, searchPlan,
+      row.requirements.map(({ sources, ...requirement }) => requirement),
+    ]) : null;
 
     async function call(channel, fn, payload) {
       const attempt = { channel, phase: analogKeys ? 'ANALOG' : 'STRICT', at: new Date().toISOString(), city: intake.city, ...payload };
@@ -192,10 +198,19 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
     }
 
     try {
+      const previous = duplicateKey && verifiedDuplicates.get(duplicateKey);
+      if (previous) {
+        record.cards.push(...structuredClone(previous.cards));
+        record.candidateLocators.push(...structuredClone(previous.candidateLocators));
+        record.attempts.push({ channel: 'REUSED_VERIFICATION', phase: 'STRICT', outcome: 'RESULT',
+          sourceRowKey: previous.key, ids: previous.cards.map(card => card.siteProductId),
+          refs: previous.cards.map(card => card.verification?.ref).filter(text) });
+        continue;
+      }
       const plan = analogKeys ? {
         lookups: [], queries: [{ strategy: 'ANALOG_REQUIRED_ATTRIBUTES',
           query: [row.category, ...row.requirements.filter(r => !r.replaceable).map(r => r.value)].join(' ') }],
-      } : planSearch(snapshot.rows[index]);
+      } : searchPlan;
       const canRecoverOnWeb = route === 'C' && typeof connectors.searchWeb === 'function';
       if (route !== 'A' && plan.lookups.length && await verify(plan.lookups.map(({ kind, value }) => ({ [kind]: value })))) continue;
       let accepted = false;
@@ -218,6 +233,16 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
       }
       if (record.candidateLocators.length && !record.cards.length) record.reason = 'CARD_VERIFICATION_UNAVAILABLE';
     } finally {
+      if (duplicateKey && calls > 0) {
+        const decision = match(policy, intake, evidence).rows[index];
+        const hasOrderSpecificEvidence = record.cards.some(card => card.delivery || card.price);
+        if (decision.status === 'EXACT' && !decision.partial && decision.stock !== 'OUT_OF_STOCK' &&
+            !hasOrderSpecificEvidence) {
+          verifiedDuplicates.set(duplicateKey, {
+            key: row.key, cards: record.cards, candidateLocators: record.candidateLocators,
+          });
+        }
+      }
       rowTimings.push({ key: row.key, elapsedMs: performance.now() - rowStarted, calls });
     }
   }

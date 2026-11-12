@@ -25,12 +25,65 @@ test('hybrid recovers a strict item automatically, preserves duplicate rows and 
     }});
   assert.equal(result.result.metrics.exact,2);
   assert.equal(result.result.metrics.reportedRows,2);
-  assert.deepEqual(order,['MCP','VERIFY','WEB','VERIFY','MCP','VERIFY','WEB','VERIFY']);
-  assert.ok(Object.values(result.evidence.rows).every(r=>r.attempts.length===4));
+  assert.deepEqual(order,['MCP','VERIFY','WEB','VERIFY']);
+  assert.equal(result.result.rows[1].attempts[0].sourceRowKey,result.result.rows[0].key);
   assert.equal(result.execution.limits.maxCallsPerRow,4);
   assert.deepEqual(result.execution.rowTimings.map(r=>r.key),result.result.rows.map(r=>r.key));
-  assert.deepEqual(result.execution.rowTimings.map(r=>r.calls),[4,4]);
+  assert.deepEqual(result.execution.rowTimings.map(r=>r.calls),[4,0]);
   assert.ok(result.execution.elapsedMs >= result.execution.rowTimings.reduce((sum,r)=>sum+r.elapsedMs,0));
+});
+
+test('duplicate reuse preserves all candidates and calculates each source quantity', async () => {
+  const rows = snapshot([{...source,quantity:1},{...source,quantity:10}]);
+  let searches = 0;
+  const pack = {size:3,sourceUnit:'шт',orderUnit:'упак',ref:'fixture#pack'};
+  const run = await runStrictWorkflow({policy,snapshot:rows,route:'B',connectors:{
+    searchMcp:async()=>{searches++;return [{siteProductId:'10'},{siteProductId:'11'}];},
+    verifyMcp:async()=>[{...card,pack},{...card,siteProductId:'11',
+      url:'https://www.vseinstrumenti.ru/product/bur-11/',model:'M2'}],
+  }});
+  assert.equal(searches,1);
+  assert.deepEqual(run.result.rows.map(r=>r.quantity),[1,4]);
+  assert.deepEqual(run.result.rows.map(r=>r.quantityVerification.excessQuantity),[2,2]);
+  assert.deepEqual(run.result.rows.map(r=>r.delivery),['NOT_CONFIRMED','NOT_CONFIRMED']);
+  assert.deepEqual(run.evidence.rows[rows.rows[1].key].cards,run.evidence.rows[rows.rows[0].key].cards);
+  assert.notEqual(run.evidence.rows[rows.rows[1].key].cards,run.evidence.rows[rows.rows[0].key].cards);
+  assert.equal(run.result.rows[1].candidateDiagnostics.length,2);
+});
+
+test('delivery evidence requires a separate pass for each quantity', async () => {
+  let searches = 0;
+  const pack = {size:1,sourceUnit:'шт',orderUnit:'шт',ref:'fixture#pack'};
+  const delivery = quantity => ({status:'CONFIRMED',city:'Москва',quantity,ref:'fixture#delivery'});
+  const first = {...card,pack,delivery:delivery(1)};
+  const second = {...card,pack,siteProductId:'11',url:'https://www.vseinstrumenti.ru/product/bur-11/',
+    delivery:delivery(10)};
+  const run = await runStrictWorkflow({policy,snapshot:snapshot([{...source,quantity:1},{...source,quantity:10}]),
+    route:'B',connectors:{
+      searchMcp:async()=>{searches++;return [{siteProductId:'10'},{siteProductId:'11'}];},
+      verifyMcp:async()=>[first,second],
+    }});
+  assert.equal(searches,2);
+  assert.deepEqual(run.result.rows.map(r=>r.card.siteProductId),['10','11']);
+  assert.deepEqual(run.result.rows.map(r=>r.delivery),['CONFIRMED','CONFIRMED']);
+});
+
+test('order prices are refreshed for duplicate quantities', async () => {
+  let searches = 0;
+  let verifications = 0;
+  const pack = {size:1,sourceUnit:'шт',orderUnit:'шт',ref:'fixture#pack'};
+  const run = await runStrictWorkflow({policy,snapshot:snapshot([{...source,quantity:1},{...source,quantity:10}]),
+    route:'B',connectors:{
+      searchMcp:async()=>{searches++;return [{siteProductId:'10'}];},
+      verifyMcp:async()=>[{...card,pack,price:{
+        amount:++verifications===1?100:90,currency:'RUB',orderUnit:'шт',
+        at:'2026-11-12T10:00:00Z',ref:'fixture#price',
+      }}],
+    }});
+  assert.equal(searches,2);
+  assert.deepEqual(run.result.rows.map(r=>r.unitPrice),[100,90]);
+  assert.deepEqual(run.result.rows.map(r=>r.amount),[100,900]);
+  assert.deepEqual(run.result.rows.map(r=>r.delivery),['NOT_CONFIRMED','NOT_CONFIRMED']);
 });
 
 test('MCP rate limit blocks further calls across rows and leaves the full result explicit', async () => {
@@ -66,7 +119,7 @@ test('strict resume searches only failed rows and retains completed evidence', a
   let searches = 0;
   const verifyMcp = async () => [card];
   const strict = await runStrictWorkflow({
-    policy, snapshot: snapshot([source, source]), route: 'B',
+    policy, snapshot: snapshot([source, {...source,text:'Бур Brand M1, оснастка'}]), route: 'B',
     connectors: {
       searchMcp: async () => {
         if (++searches === 2) throw new Error('Transport failure');
