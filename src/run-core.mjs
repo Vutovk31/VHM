@@ -1,7 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { normalizeRequest, parseRequestCsv } from './intake.mjs';
-import { runStrictWorkflow, runAnalogWorkflow, resumeStrictWorkflow } from './workflow.mjs';
+import { runAnalogWorkflow } from './workflow.mjs';
+import { runAutomaticStrict, validateRecoveryOptions } from './strict-recovery.mjs';
 import { loadRun, saveRun } from './run-store.mjs';
 import { createHostTransport } from './host-transport.mjs';
 import { createViConnectors } from './vi-connectors.mjs';
@@ -36,6 +37,12 @@ if (exporting) {
   process.exit(0);
 }
 let run;
+let checkpoint;
+async function persistRevision(savedRun) {
+  checkpoint = await saveRun(directory, savedRun, checkpoint?.revision ?? prior?.revision ?? 0);
+  await writeFile(join(directory,'result-'+checkpoint.revision+'.json'),
+    JSON.stringify({ ...savedRun.result, execution: savedRun.execution, recovery: savedRun.recovery },null,2),{flag:'wx'});
+}
 if (approving) {
   const { revision, ...approval } = await read(route);
   const saved = prior?.run;
@@ -54,11 +61,15 @@ if (approving) {
 } else {
   const transport = await createHostTransport(join(directory,'host'));
   const session = await read(resuming ? route : sessionFile);
+  const recovery = validateRecoveryOptions(session.recovery);
   const connectors = { ...createViConnectors({...transport,session}),
     ...createWebConnector(transport) };
-  const limits = { deadlineMs: Number(process.env.VHM_HOST_DEADLINE_MS ?? 30_000) };
+  const limits = process.env.VHM_HOST_DEADLINE_MS === undefined ? {} :
+    { deadlineMs: Number(process.env.VHM_HOST_DEADLINE_MS) };
   if (resuming) {
-    run = await resumeStrictWorkflow({ policy, strictRun: prior?.run, connectors, ...limits });
+    if (!prior) throw new Error('Saved strict run required for resume');
+    run = await runAutomaticStrict({ policy, strictRun: prior.run, connectors, ...limits,
+      recovery, onRevision: persistRevision });
   } else if (permissionFile) {
     if (!prior) throw new Error('Saved strict run is required for analog continuation');
     run = await runAnalogWorkflow({policy,strictRun:prior.run,permission:await read(permissionFile),route,connectors,...limits});
@@ -80,13 +91,12 @@ if (approving) {
     if (session.technicalNormalization === true) {
       snapshot = await interpretThroughHost(snapshot, transport, AbortSignal.timeout(300_000));
     }
-    run = await runStrictWorkflow({policy,snapshot,route,connectors,...limits});
+    run = await runAutomaticStrict({policy,snapshot,route,connectors,...limits,
+      recovery,onRevision:persistRevision});
   }
 }
-const checkpoint = await saveRun(directory,run,prior?.revision??0);
-await writeFile(join(directory,'result-'+checkpoint.revision+'.json'),
-  JSON.stringify({ ...run.result, execution: run.execution },null,2),{flag:'wx'});
+if (!checkpoint) await persistRevision(run);
 if (process.env.VHM_EXPORT_XLSX === '1') await exportRevision(checkpoint);
 console.log(JSON.stringify({requestId:run.intake.requestId,revision:checkpoint.revision,
  phase:run.phase,metrics:run.result.metrics,approvalNeeded:run.result.approvalNeeded,
- strictRetryNeeded:run.result.strictRetryNeeded}));
+ strictRetryNeeded:run.result.strictRetryNeeded,recovery:run.recovery}));
