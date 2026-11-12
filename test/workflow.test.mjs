@@ -135,7 +135,7 @@ test('strict resume searches only failed rows and retains completed evidence', a
   }});
   assert.deepEqual(resumed.execution.rowTimings.map(row=>row.key),[second.key]);
   assert.deepEqual(resumed.evidence.rows[first.key],strict.evidence.rows[first.key]);
-  assert.equal(strict.result.rows[1].status,'NOT_SEARCHED');
+  assert.equal(strict.result.rows[1].status,'SEARCH_INCOMPLETE');
   assert.deepEqual(resumed.result.rows.map(row=>row.status),['EXACT','EXACT']);
   assert.deepEqual(resumed.result.strictRetryNeeded,[]);
   assert.equal(resumed.previousStrictDigest,strict.digest);
@@ -148,6 +148,104 @@ test('verification cannot substitute unrelated identifiers or accept unverified 
   }});
   assert.equal(result.result.metrics.exact,0);
   assert.equal(Object.values(result.evidence.rows)[0].cards.length,0);
+});
+
+test('resume verifies a saved candidate before searching and retains prior successful queries', async () => {
+  const queries=[];
+  const connectors={
+    searchMcp:async({query})=>{queries.push(query);return queries.length===1?[]:[{siteProductId:'10'}];},
+    verifyMcp:async()=>[card],
+  };
+  const first=await runStrictWorkflow({policy,snapshot:snapshot([source]),route:'B',maxCallsPerRow:2,connectors});
+  const key=first.intake.rows[0].key;
+  assert.equal(first.result.rows[0].status,'SEARCH_INCOMPLETE');
+  assert.deepEqual(first.evidence.rows[key].searchProgress.pendingCandidates,[{siteProductId:'10'}]);
+  const saved=JSON.parse(JSON.stringify(first));
+  const resumed=await resumeStrictWorkflow({policy,strictRun:saved,maxCallsPerRow:2,connectors});
+  assert.equal(queries.length,2);
+  assert.equal(new Set(queries).size,2);
+  assert.equal(resumed.result.rows[0].status,'EXACT');
+  assert.equal(resumed.execution.rowTimings[0].calls,1);
+  assert.deepEqual(resumed.evidence.rows[key].attempts.slice(0,first.evidence.rows[key].attempts.length),first.evidence.rows[key].attempts);
+  assert.deepEqual(resumed.evidence.rows[key].searchProgress.pendingCandidates,[]);
+  assert.equal(first.result.rows[0].status,'SEARCH_INCOMPLETE');
+});
+
+test('web recovery drains saved URL candidates without repeating discovery or rejected cards', async () => {
+  const wrong={...card,siteProductId:'11',model:'M2',url:'https://www.vseinstrumenti.ru/product/bur-11/'};
+  let searches=0;
+  const checked=[];
+  const connectors={
+    searchWeb:async()=>{searches++;return [{url:wrong.url},{url:card.url}];},
+    verifyMcp:async({candidates})=>{checked.push(candidates[0].url);return [candidates[0].url===wrong.url?wrong:card];},
+  };
+  const first=await runStrictWorkflow({policy,snapshot:snapshot([source]),route:'A',maxCallsPerRow:2,connectors});
+  assert.equal(first.result.rows[0].status,'SEARCH_INCOMPLETE');
+  const resumed=await resumeStrictWorkflow({policy,strictRun:JSON.parse(JSON.stringify(first)),maxCallsPerRow:2,connectors});
+  assert.equal(resumed.result.rows[0].status,'EXACT');
+  assert.equal(searches,1);
+  assert.deepEqual(checked,[wrong.url,card.url]);
+  assert.equal(resumed.result.rows[0].candidateDiagnostics.length,2);
+});
+
+test('empty search advances a finite saved queue and requests analog permission only after exhaustion', async () => {
+  const queries=[];
+  const connectors={searchMcp:async({query})=>{queries.push(query);return [];}};
+  let run=await runStrictWorkflow({policy,snapshot:snapshot([{...source,text:'Бур Brand M1 специальный'}]),
+    route:'B',maxCallsPerRow:2,connectors});
+  let resumes=0;
+  while(run.result.strictRetryNeeded.length && resumes++<10) {
+    assert.equal(run.result.rows[0].status,'SEARCH_INCOMPLETE');
+    assert.deepEqual(run.result.approvalNeeded,[]);
+    run=await resumeStrictWorkflow({policy,strictRun:JSON.parse(JSON.stringify(run)),maxCallsPerRow:2,connectors});
+  }
+  assert.ok(resumes<10);
+  assert.equal(queries.length,new Set(queries).size);
+  assert.equal(run.result.rows[0].status,'NOT_FOUND');
+  assert.deepEqual(run.result.approvalNeeded,[run.intake.rows[0].key]);
+  assert.equal(run.result.rows[0].searchProgress.status,'COMPLETE');
+});
+
+test('unrelated verification responses leave the requested locator pending through resume', async () => {
+  const connectors={searchMcp:async()=>[{siteProductId:'11'}],verifyMcp:async()=>[card]};
+  const first=await runStrictWorkflow({policy,snapshot:snapshot([source]),route:'B',maxCallsPerRow:2,connectors});
+  assert.equal(first.result.rows[0].status,'SEARCH_INCOMPLETE');
+  let searches=0;
+  const resumed=await resumeStrictWorkflow({policy,strictRun:first,maxCallsPerRow:2,connectors:{
+    searchMcp:async()=>{searches++;return [];},
+    verifyMcp:async()=>[{...card,siteProductId:'11',url:'https://www.vseinstrumenti.ru/product/bur-11/'}],
+  }});
+  assert.equal(searches,0);
+  assert.equal(resumed.result.rows[0].status,'EXACT');
+  assert.equal(resumed.result.rows[0].card.siteProductId,'11');
+});
+
+test('resume inherits recorded limits and does not erase an earlier provider failure', async () => {
+  const first=await runStrictWorkflow({policy,snapshot:snapshot([source]),route:'B',
+    maxCallsPerRow:2,candidateDepth:2,connectors:{searchMcp:async()=>{throw new Error('offline');}}});
+  const resumed=await resumeStrictWorkflow({policy,strictRun:first,connectors:{
+    searchMcp:async()=>[{siteProductId:'10'}],verifyMcp:async()=>[card],
+  }});
+  assert.deepEqual(resumed.execution.limits,first.execution.limits);
+  assert.equal(resumed.result.rows[0].status,'EXACT');
+  assert.equal(resumed.result.rows[0].partial,false);
+  assert.ok(resumed.result.rows[0].attempts.some(a=>a.outcome==='ERROR'));
+  await assert.rejects(()=>resumeStrictWorkflow({policy,strictRun:first,candidateDepth:3}),/Saved search plan/);
+});
+
+test('an invalid verification cannot exhaust the queue and can be corrected for the same SKU', async () => {
+  const first=await runStrictWorkflow({policy,snapshot:snapshot([source]),route:'B',connectors:{
+    searchMcp:async()=>[{siteProductId:'10'}],
+    verifyMcp:async()=>[{...card,url:'https://example.com/product/bur-10/'}],
+  }});
+  assert.equal(first.result.rows[0].status,'SEARCH_INCOMPLETE');
+  assert.deepEqual(first.result.approvalNeeded,[]);
+  const resumed=await resumeStrictWorkflow({policy,strictRun:first,connectors:{
+    searchMcp:async()=>{throw new Error('Must verify saved candidate first');},verifyMcp:async()=>[card],
+  }});
+  assert.equal(resumed.result.rows[0].status,'EXACT');
+  assert.equal(resumed.result.rows[0].partial,false);
+  assert.equal(resumed.result.rows[0].candidateDiagnostics.length,2);
 });
 
 test('incomplete normalization returns a clarification without calling a provider', async () => {
@@ -233,6 +331,19 @@ test('stale permissions, resolved rows and technical mismatches cannot authorize
   }});
   await assert.rejects(()=>runAnalogWorkflow({policy,strictRun:resolved,permission:{
     ...permission,strictDigest:resolved.digest,keys:[resolved.intake.rows[0].key]}}),/permission/);
+});
+
+test('an analog provider failure remains incomplete after strict exhaustion', async () => {
+  const strict=await runStrictWorkflow({policy,snapshot:snapshot([source]),route:'B',
+    connectors:{searchMcp:async()=>[]}});
+  const permission={requestId:strict.result.requestId,strictDigest:strict.digest,by:'manager',
+    at:'2026-11-12T12:00:00Z',decision:'ALLOW_ANALOG_DISCOVERY',keys:[strict.intake.rows[0].key]};
+  const run=await runAnalogWorkflow({policy,strictRun:strict,permission,connectors:{
+    searchMcp:async()=>{throw new Error('offline');},
+  }});
+  assert.equal(run.result.rows[0].status,'SEARCH_INCOMPLETE');
+  assert.equal(run.result.rows[0].partial,true);
+  assert.ok(run.result.rows[0].attempts.some(a=>a.phase==='ANALOG' && a.outcome==='ERROR'));
 });
 
 test('only explicitly replaceable typed criteria can become a disclosed analog deviation', async () => {

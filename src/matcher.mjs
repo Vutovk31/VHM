@@ -15,7 +15,7 @@ export function validatePolicy(policy) {
     new Set(policy.preferredBrands.map(normalize)).size === policy.preferredBrands.length, 'Invalid preferred brands');
 }
 
-function verified(card, host) {
+export function verified(card, host) {
   if (card?.verification?.source !== 'MCP_VERIFY' || !present(card.verification.ref) ||
       !present(card.siteProductId) || !present(card.title)) return false;
   try {
@@ -129,6 +129,10 @@ function makeDecision(policy, row, record, permit, accepted, city) {
     if ((record.cards ?? []).some(candidate => !verified(candidate, policy.catalogHost))) status = 'EXACT_UNVERIFIED';
     else if (!(record.cards ?? []).length && !attempts.some(attempt => attempt.outcome === 'RESULT' || attempt.outcome === 'MISS')) status = 'NOT_SEARCHED';
   }
+  const analogIncomplete = attempts.some(attempt => attempt.phase === 'ANALOG' &&
+    ['ERROR', 'UNAVAILABLE'].includes(attempt.outcome));
+  if (row.kind !== 'CLARIFY' && (record.searchProgress?.status === 'PENDING' || analogIncomplete) &&
+      !['EXACT', 'PRODUCT_PROPOSED', 'ANALOG_PROPOSED'].includes(status)) status = 'SEARCH_INCOMPLETE';
   const proposed = ['ANALOG_PROPOSED', 'PRODUCT_PROPOSED'].includes(status);
   const approved = proposed && accepted?.siteProductId === card.siteProductId;
   if (accepted) require(approved, `Approval does not match an eligible proposal: ${row.key}`);
@@ -148,7 +152,9 @@ function makeDecision(policy, row, record, permit, accepted, city) {
       status === 'EXACT' ? card.title : row.clarification ?? '',
     reason: card && !supplyConfirmed ? 'DELIVERY_UNVERIFIED' :
       status === 'CLARIFICATION_REQUIRED' ? 'MISSING_REQUIREMENTS' : record.reason ?? status,
-    partial: attempts.some(attempt => ['ERROR', 'UNAVAILABLE'].includes(attempt.outcome)),
+    searchProgress: record.searchProgress,
+    partial: analogIncomplete || (record.searchProgress ? record.searchProgress.status === 'PENDING' :
+      attempts.some(attempt => ['ERROR', 'UNAVAILABLE'].includes(attempt.outcome))),
     candidateDiagnostics: (record.cards ?? []).map(candidate => ({
       ...candidateDiagnostics(policy, row, candidate, permit),
       selected: !!card && candidate === card,
@@ -205,12 +211,13 @@ export function match(policy, intake, evidence) {
       procurement.push(`${row.card.viCode} — ${row.card.title} — ${row.quantity} ${row.card.pack.orderUnit}`);
     }
     if (row.quantity && present(row.card?.title)) hunter.push(`${row.card.title} ${row.quantity} ${row.card.pack.orderUnit}`);
-    if (row.kind === 'STRICT' && (row.status !== 'EXACT' || row.stock === 'OUT_OF_STOCK') &&
+    if (['STRICT','OPEN'].includes(row.kind) && (row.status !== 'EXACT' || row.stock === 'OUT_OF_STOCK') &&
         !permit?.keys.includes(row.key)) {
-      const incomplete = ['NOT_SEARCHED', 'EXACT_UNVERIFIED'].includes(row.status) ||
-        row.attempts.some(attempt => attempt.phase !== 'ANALOG' && ['ERROR', 'UNAVAILABLE'].includes(attempt.outcome));
+      const incomplete = row.searchProgress ? row.searchProgress.status === 'PENDING' :
+        ['NOT_SEARCHED', 'EXACT_UNVERIFIED'].includes(row.status) ||
+          row.attempts.some(attempt => attempt.phase !== 'ANALOG' && ['ERROR', 'UNAVAILABLE'].includes(attempt.outcome));
       if (incomplete) strictRetryNeeded.push(row.key);
-      else if (permit?.decision !== 'STRICT_ONLY') approvalNeeded.push(row.key);
+      else if (row.kind === 'STRICT' && permit?.decision !== 'STRICT_ONLY') approvalNeeded.push(row.key);
     }
   }
   const closedGroups = [...groups.values()].filter(Boolean).length;

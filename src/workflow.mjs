@@ -1,4 +1,4 @@
-import { match } from './matcher.mjs';
+import { match, verified } from './matcher.mjs';
 import { planSearch } from './search-plan.mjs';
 import { evaluateCharacteristics } from './technical-checks.mjs';
 import { createHash } from 'node:crypto';
@@ -109,6 +109,37 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
     let calls = 0;
     const rowStarted = performance.now();
     const searchPlan = analogKeys ? null : planSearch(snapshot.rows[index]);
+    const queryKey = (channel, variant) => JSON.stringify([channel, variant.strategy, variant.query]);
+    const plannedQueries = analogKeys ? [] : routeChannels[route].flatMap(channel =>
+      searchPlan.queries.map(variant => queryKey(channel, variant)));
+    const planDigest = analogKeys ? null : createHash('sha256').update(JSON.stringify([
+      route, searchPlan, row.requirements, candidateDepth,
+    ])).digest('hex');
+    let progress = null;
+    if (!analogKeys) {
+      if (record.searchProgress && (record.searchProgress.version !== 1 ||
+          record.searchProgress.planDigest !== planDigest)) {
+        throw new Error('Saved search plan does not match the current requirements or depth');
+      }
+      progress = record.searchProgress ??= {
+        version: 1, planDigest, status: 'PENDING',
+        completedQueries: record.attempts.filter(attempt =>
+          routeChannels[route].includes(attempt.channel) && ['RESULT', 'MISS'].includes(attempt.outcome))
+          .map(attempt => queryKey(attempt.channel, attempt)),
+        checkedLocators: record.candidateLocators.filter(locator => record.cards.some(card =>
+          verified(card, policy.catalogHost) &&
+          Object.entries(locator).every(([key, value]) => card[key] === value))),
+        pendingCandidates: [],
+      };
+      for (const locator of record.candidateLocators) {
+        if (!progress.checkedLocators.some(checked => JSON.stringify(checked) === JSON.stringify(locator)) &&
+            !progress.pendingCandidates.some(pending => JSON.stringify(pending) === JSON.stringify(locator))) {
+          progress.pendingCandidates.push(locator);
+        }
+      }
+      for (const locator of progress.checkedLocators) seenLocators.add(JSON.stringify(locator));
+      for (const card of record.cards) if (verified(card, policy.catalogHost)) seenCards.add(card.siteProductId);
+    }
     const duplicateKey = !analogKeys && row.kind === 'STRICT' ? JSON.stringify([
       row.category, row.brand, row.model, row.mpn, searchPlan,
       row.requirements.map(({ sources, ...requirement }) => requirement),
@@ -149,20 +180,41 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
         seenLocators.add(JSON.stringify(locator));
         locators.push(locator);
       }
-      record.candidateLocators.push(...locators);
+      for (const locator of locators) {
+        if (!record.candidateLocators.some(saved => JSON.stringify(saved) === JSON.stringify(locator))) {
+          record.candidateLocators.push(locator);
+        }
+      }
+      if (progress) for (const locator of locators) {
+        if (!progress.pendingCandidates.some(pending => JSON.stringify(pending) === JSON.stringify(locator))) {
+          progress.pendingCandidates.push(locator);
+        }
+      }
       if (!locators.length) return false;
       const ids = locators.filter(locator => locator.siteProductId);
       const batches = [...(ids.length ? [ids] : []), ...locators.filter(locator => !locator.siteProductId).map(locator => [locator])];
       const cards = [];
       for (const candidates of batches) {
-        cards.push(...await call('MCP_VERIFY', connectors.verifyMcp, { candidates,
-          requirements: row.requirements, limit: candidates.length }));
+        const response = await call('MCP_VERIFY', connectors.verifyMcp, { candidates,
+          requirements: row.requirements, limit: candidates.length });
+        cards.push(...response);
+        const outcome = record.attempts.at(-1).outcome;
+        if (progress && ['RESULT', 'MISS'].includes(outcome)) {
+          for (const locator of candidates) {
+            if (response.length && !response.some(card => verified(card, policy.catalogHost) &&
+                Object.entries(locator).every(([key, value]) => card[key] === value))) continue;
+            const locatorKey = JSON.stringify(locator);
+            progress.checkedLocators.push(locator);
+            progress.pendingCandidates = progress.pendingCandidates.filter(pending =>
+              JSON.stringify(pending) !== locatorKey);
+          }
+        }
         if (calls >= maxCallsPerRow || signal.aborted || blocked.has('MCP')) break;
       }
       for (const card of cards.slice(0, locators.length)) {
         if (!card || (!analogKeys && card.stage === 'ANALOG') || seenCards.has(card.siteProductId)) continue;
         if (!locators.some(locator => Object.entries(locator).every(([key, value]) => card[key] === value))) continue;
-        seenCards.add(card.siteProductId);
+        if (verified(card, policy.catalogHost)) seenCards.add(card.siteProductId);
         const typed = row.requirements.filter(requirement => requirement.test);
         const checks = typed.length && text(card.verification?.ref) ? evaluateCharacteristics(
           typed, card.characteristics ?? [], card.verification.ref) : {};
@@ -212,14 +264,31 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
           query: [row.category, ...row.requirements.filter(r => !r.replaceable).map(r => r.value)].join(' ') }],
       } : searchPlan;
       const canRecoverOnWeb = route === 'C' && typeof connectors.searchWeb === 'function';
+      if (progress?.pendingCandidates.length) {
+        let acceptedPending = false;
+        while (progress.pendingCandidates.length) {
+          const pendingCount = progress.pendingCandidates.length;
+          if (await verify([...progress.pendingCandidates])) {
+            acceptedPending = true;
+            break;
+          }
+          if (calls >= maxCallsPerRow || signal.aborted || blocked.has('MCP') ||
+              progress.pendingCandidates.length >= pendingCount) break;
+        }
+        if (acceptedPending || progress.pendingCandidates.length) continue;
+      }
       if (route !== 'A' && plan.lookups.length && await verify(plan.lookups.map(({ kind, value }) => ({ [kind]: value })))) continue;
       let accepted = false;
       for (const channel of routeChannels[route]) {
         const fn = channel === 'WEB' ? connectors.searchWeb : connectors.searchMcp;
         const budget = channel === 'MCP_TEXT' && canRecoverOnWeb ? Math.max(2, maxCallsPerRow - 2) : maxCallsPerRow;
         for (const variant of plan.queries) {
+          if (progress?.completedQueries.includes(queryKey(channel, variant))) continue;
           if (calls >= budget || signal.aborted || blocked.has('MCP')) break;
           const candidates = await call(channel, fn, { ...variant, limit: candidateDepth });
+          if (progress && ['RESULT', 'MISS'].includes(record.attempts.at(-1).outcome)) {
+            progress.completedQueries.push(queryKey(channel, variant));
+          }
           if (await verify(candidates)) {
             accepted = true;
             break;
@@ -232,7 +301,15 @@ async function executeWorkflow({ policy, snapshot, intake, evidence, route, conn
         record.attempts.push({ channel: 'MCP_VERIFY', outcome: 'UNAVAILABLE', reason: blocked.get('MCP') });
       }
       if (record.candidateLocators.length && !record.cards.length) record.reason = 'CARD_VERIFICATION_UNAVAILABLE';
+      else if (record.reason === 'CARD_VERIFICATION_UNAVAILABLE') delete record.reason;
     } finally {
+      if (progress) {
+        const decision = match(policy, intake, evidence).rows[index];
+        const accepted = decision.status === 'EXACT' || decision.status === 'PRODUCT_PROPOSED';
+        const queriesComplete = plannedQueries.every(key => progress.completedQueries.includes(key));
+        progress.status = accepted || (queriesComplete && !progress.pendingCandidates.length)
+          ? 'COMPLETE' : 'PENDING';
+      }
       if (duplicateKey && calls > 0) {
         const decision = match(policy, intake, evidence).rows[index];
         const hasOrderSpecificEvidence = record.cards.some(card => card.delivery || card.price);
@@ -276,8 +353,7 @@ export async function resumeStrictWorkflow({ strictRun, ...options }) {
   const { strictRetryNeeded } = match(policy, strictRun.intake, strictRun.evidence);
   if (!strictRetryNeeded.length) throw new Error('No incomplete strict rows to resume');
   const evidence = structuredClone(strictRun.evidence);
-  for (const key of strictRetryNeeded) delete evidence.rows[key];
-  const run = await executeWorkflow({ ...options, snapshot: strictRun.snapshot, intake: strictRun.intake,
+  const run = await executeWorkflow({ ...strictRun.execution?.limits, ...options, snapshot: strictRun.snapshot, intake: strictRun.intake,
     evidence, route: evidence.route, strictKeys: new Set(strictRetryNeeded) });
   return { ...run, snapshot: strictRun.snapshot, phase: 'STRICT_COMPLETE',
     previousStrictDigest: strictRun.digest, digest: runDigest(policy, run.intake, run.evidence) };
