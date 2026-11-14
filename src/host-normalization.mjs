@@ -18,7 +18,7 @@ function fragments(row) {
 export function buildInterpretationRequest(snapshot) {
   return {
     requestId: snapshot.requestId, policyVersion: snapshot.policyVersion,
-    rows: snapshot.rows.filter(row => !row.requirements.length).map(row => ({
+    rows: snapshot.rows.filter(row => !row.requirements.length || row.interpretation?.mode === 'REVIEW').map(row => ({
       key: row.key, sourceDigest: sourceDigest(row), number: row.number,
       fragments: Object.fromEntries(fragments(row)), requestedQuantity: row.quantity, requestedUnit: row.unit,
       analysis: row.analysis,
@@ -39,7 +39,7 @@ export function applyInterpretation(snapshot, response, request = buildInterpret
     if (!row || !requested.has(review.key) || reviewed.has(review.key) ||
         review.sourceDigest !== requested.get(review.key).sourceDigest ||
         review.sourceDigest !== sourceDigest(row)) throw new Error('Unknown, duplicate or stale interpreted row');
-    if (!['STRICT','OPEN','CLARIFY'].includes(review.mode) || !present(review.category) ||
+    if (!['STRICT','OPEN','CLARIFY','REVIEW'].includes(review.mode) || !present(review.category) ||
         !Array.isArray(review.requirements) || !Array.isArray(review.claims)) {
       throw new Error('Invalid row interpretation');
     }
@@ -50,7 +50,7 @@ export function applyInterpretation(snapshot, response, request = buildInterpret
     if (row.product.brand && review.brand && normalize(row.product.brand) !== normalize(review.brand)) {
       throw new Error('Interpreted brand conflicts with an explicit brand');
     }
-    if (row.product.category && normalize(row.product.category) !== normalize(review.category)) {
+    if (row.product.category && row.product.category !== 'UNCLASSIFIED' && normalize(row.product.category) !== normalize(review.category)) {
       throw new Error('Interpreted category conflicts with an explicit category');
     }
     if (review.mode === 'OPEN' && (review.brand || row.analysis.brands.length || row.product.brand ||
@@ -118,7 +118,9 @@ export function applyInterpretation(snapshot, response, request = buildInterpret
     const clarify = row.original.kind === 'CLARIFY' || review.mode === 'CLARIFY' || unresolved || missing || !requirements.size ||
       ambiguousSetCount ||
       row.analysis.brands.length > 1;
-    if (clarify && !present(question)) throw new Error('Unresolved interpretation requires a specific question');
+    const internalReview = review.mode === 'REVIEW' && row.original.kind !== 'CLARIFY';
+    if (internalReview && !present(review.reviewReason)) throw new Error('Internal review requires a specific reason');
+    if (clarify && !internalReview && !present(question)) throw new Error('Unresolved interpretation requires a specific question');
     reviewed.set(review.key, {
       ...row, product: {...row.product, category:review.category,
         brand:review.brand || row.product.brand || (row.analysis.brands.length===1?row.analysis.brands[0].value:'')},
@@ -126,8 +128,10 @@ export function applyInterpretation(snapshot, response, request = buildInterpret
       quantityClarification: row.quantityClarification || axisQuestions.QUANTITY.join('\n'),
       deliveryClarification: row.deliveryClarification || axisQuestions.DELIVERY.join('\n'),
       quoteClarification: row.quoteClarification || axisQuestions.QUOTE.join('\n'),
-      interpretation:{actor:response.actor,sourceDigest:review.sourceDigest,complete:!clarify,
-        mode:clarify?'CLARIFY':review.mode,question:clarify?question:undefined,claims:review.claims},
+      interpretation:{actor:response.actor,sourceDigest:review.sourceDigest,complete:!clarify && !internalReview,
+        mode:internalReview?'REVIEW':clarify?'CLARIFY':review.mode,
+        question:clarify && !internalReview?question:undefined,
+        reviewReason:internalReview?review.reviewReason:undefined,claims:review.claims},
     });
   }
   if (reviewed.size !== requested.size) throw new Error('Host interpretation omitted source rows');

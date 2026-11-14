@@ -105,7 +105,9 @@ function makeDecision(policy, row, record, permit, accepted, city) {
     ['brand', 'model', 'mpn'].every(key => !present(row[key]) || normalize(row[key]) === normalize(card[key]));
   let status = 'NOT_FOUND';
   let card;
-  if (row.kind === 'CLARIFY') {
+  if (row.kind === 'REVIEW') {
+    status = 'TECHNICAL_REVIEW_REQUIRED';
+  } else if (row.kind === 'CLARIFY') {
     status = 'CLARIFICATION_REQUIRED';
   } else if (row.kind === 'OPEN') {
     const proposals = eligible.filter(candidate => present(candidate.model) && present(candidate.assumptions) && checkRequirements(row, candidate, false)).sort(rank);
@@ -131,7 +133,7 @@ function makeDecision(policy, row, record, permit, accepted, city) {
   }
   const analogIncomplete = attempts.some(attempt => attempt.phase === 'ANALOG' &&
     ['ERROR', 'UNAVAILABLE'].includes(attempt.outcome));
-  if (row.kind !== 'CLARIFY' && (record.searchProgress?.status === 'PENDING' || analogIncomplete) &&
+  if (!['CLARIFY','REVIEW'].includes(row.kind) && (record.searchProgress?.status === 'PENDING' || analogIncomplete) &&
       !['EXACT', 'PRODUCT_PROPOSED', 'ANALOG_PROPOSED'].includes(status)) status = 'SEARCH_INCOMPLETE';
   const proposed = ['ANALOG_PROPOSED', 'PRODUCT_PROPOSED'].includes(status);
   const approved = proposed && accepted?.siteProductId === card.siteProductId;
@@ -149,7 +151,7 @@ function makeDecision(policy, row, record, permit, accepted, city) {
     delivery: supplyConfirmed ? 'CONFIRMED' : card?.delivery?.status === 'PICKUP_ONLY' &&
       !!city && normalize(card.delivery.city) === normalize(city) ? 'PICKUP_ONLY' : 'NOT_CONFIRMED',
     clientText: proposed ? `Предложен товар — ${card.title}, ${card.model ?? card.mpn ?? 'модель не указана'}` :
-      status === 'EXACT' ? card.title : row.clarification ?? '',
+      status === 'EXACT' ? card.title : row.kind === 'REVIEW' ? 'Техническая проверка продолжается' : row.clarification ?? '',
     reason: card && !supplyConfirmed ? 'DELIVERY_UNVERIFIED' :
       status === 'CLARIFICATION_REQUIRED' ? 'MISSING_REQUIREMENTS' : record.reason ?? status,
     searchProgress: record.searchProgress,
@@ -171,13 +173,14 @@ export function match(policy, intake, evidence) {
   const keys = new Set();
   for (const row of intake.rows) {
     require([row.key, row.group, row.text, row.category].every(present) && !keys.has(row.key), 'Invalid or duplicate source row');
-    require(['STRICT', 'OPEN', 'CLARIFY'].includes(row.kind), 'Invalid row kind');
+    require(['STRICT', 'OPEN', 'CLARIFY', 'REVIEW'].includes(row.kind), 'Invalid row kind');
     require(Array.isArray(row.requirements) && row.requirements.every(item => present(item.key) && present(item.value)) &&
       new Set(row.requirements.map(item => item.key)).size === row.requirements.length, 'Invalid requirements');
     const identity = ['brand', 'model', 'mpn'].some(key => present(row[key]));
     require(row.kind !== 'STRICT' || identity || row.requirements.length > 0, 'Strict row needs requirements');
     require(row.kind !== 'OPEN' || !identity, 'Open row cannot have explicit identity');
     require(row.kind !== 'CLARIFY' || present(row.clarification), 'Clarification question missing');
+    require(row.kind !== 'REVIEW' || present(row.reviewReason), 'Internal review reason missing');
     keys.add(row.key);
   }
   for (const key of Object.keys(evidence.rows ?? {})) require(keys.has(key), 'Evidence row not in intake');
@@ -211,7 +214,7 @@ export function match(policy, intake, evidence) {
       procurement.push(`${row.card.viCode} — ${row.card.title} — ${row.quantity} ${row.card.pack.orderUnit}`);
     }
     if (row.quantity && present(row.card?.title)) hunter.push(`${row.card.title} ${row.quantity} ${row.card.pack.orderUnit}`);
-    if (['STRICT','OPEN'].includes(row.kind) && (row.status !== 'EXACT' || row.stock === 'OUT_OF_STOCK') &&
+    if (['STRICT','OPEN','REVIEW'].includes(row.kind) && (row.status !== 'EXACT' || row.stock === 'OUT_OF_STOCK') &&
         !permit?.keys.includes(row.key)) {
       const incomplete = row.searchProgress ? row.searchProgress.status === 'PENDING' :
         ['NOT_SEARCHED', 'EXACT_UNVERIFIED'].includes(row.status) ||

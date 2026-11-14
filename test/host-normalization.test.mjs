@@ -41,6 +41,40 @@ test('uncovered technical text cannot silently become a complete interpretation'
  assert.equal(result.rows[0].interpretation.mode,'CLARIFY');
  assert.match(result.rows[0].interpretation.question,/изоляции/);
 });
+
+test('catalog mapping gaps remain internal, searchable and ineligible for exact or analog acceptance',async()=>{
+ const {snapshot,request,response}=setup();
+ response.rows[0].mode='REVIEW';
+ response.rows[0].reviewReason='Проверить соответствие массы и поля каталога';
+ const interpreted=applyInterpretation(snapshot,response,request);
+ assert.equal(interpreted.rows[0].interpretation.complete,false);
+ assert.equal(interpreted.rows[0].interpretation.question,undefined);
+ assert.equal(buildInterpretationRequest(interpreted).rows.length,1);
+ const policy=JSON.parse(readFileSync(new URL('../policy/vi.json',import.meta.url)));
+ let searches=0;
+ const run=await runStrictWorkflow({policy,snapshot:interpreted,route:'B',connectors:{
+  searchMcp:async()=>{searches++;return [{siteProductId:'10'}];},
+  verifyMcp:async()=>[{siteProductId:'10',title:'Молоток кованый 800 г',category:'молоток',
+   url:'https://www.vseinstrumenti.ru/product/molotok-10/',stage:'EXACT',
+   verification:{source:'MCP_VERIFY',ref:'fixture#card'},characteristics:[
+    {name:'Кованый',value:'да'},{name:'Вес бойка',value:'800',unit:'г'}]}],
+ }});
+ assert.ok(searches>0);
+ assert.equal(run.result.rows[0].status,'TECHNICAL_REVIEW_REQUIRED');
+ assert.equal(run.result.rows[0].card,null);
+ assert.equal(run.result.rows[0].clientText,'Техническая проверка продолжается');
+ assert.deepEqual(run.result.approvalNeeded,[]);
+ assert.equal(run.result.procurement.length,0);
+ assert.equal(run.result.rows[0].candidateDiagnostics.length,1);
+ const invalid=structuredClone(response);
+ delete invalid.rows[0].reviewReason;
+ assert.throws(()=>applyInterpretation(snapshot,invalid,request),/specific reason/);
+ snapshot.rows[0].original.kind='CLARIFY';
+ const fresh=buildInterpretationRequest(snapshot);
+ response.rows[0].sourceDigest=fresh.rows[0].sourceDigest;
+ response.rows[0].question='Подтвердите обязательное требование изоляции';
+ assert.equal(applyInterpretation(snapshot,response,fresh).rows[0].interpretation.mode,'CLARIFY');
+});
 test('rejects changed sources, omitted rows, forged spans and technical words discarded as syntax',()=>{
  const {snapshot,request,response}=setup();
  const changed=structuredClone(snapshot);
@@ -53,6 +87,16 @@ test('rejects changed sources, omitted rows, forged spans and technical words di
  const discarded=structuredClone(response);
  discarded.rows[0].claims[1].role='SYNTAX';
  assert.throws(()=>applyInterpretation(snapshot,discarded,request),/discarded/);
+});
+
+test('an unresolved category placeholder can be mapped without overriding a concrete category',()=>{
+ const {snapshot,request,response}=setup();
+ snapshot.rows[0].product.category='UNCLASSIFIED';
+ const mapped=applyInterpretation(snapshot,response,request);
+ assert.equal(mapped.rows[0].product.category,'молоток');
+ assert.equal(mapped.rows[0].interpretation.complete,true);
+ snapshot.rows[0].product.category='кувалда';
+ assert.throws(()=>applyInterpretation(snapshot,response,request),/conflicts with an explicit category/);
 });
 
 test('an explicit clarification gate cannot be cleared by a complete host disposition',()=>{

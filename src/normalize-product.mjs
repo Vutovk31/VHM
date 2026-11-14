@@ -44,6 +44,7 @@ const categories = [
   ['кернер', /(?<!\p{L})кернер[\p{L}]*/iu],
   ['пневматическая трещотка', /пневматическ[\p{L}]* трещ[оё]тк[\p{L}]*/iu],
   ['набор напильников', /набор[\p{L}]* напильников/iu],
+  ['ящик', /(?<!\p{L})ящик(?:и|а|ов|ом)?(?!\p{L})/iu],
 ];
 const escape = value => value.replace(/[.*+?^$()|[\]\\{}]/g, '\\$&');
 const excludedCodes = /^(?:CrV|CrMoV|SDS-plus|Li-Ion|LXT|VDE|HEX|TORX|PH\d*|PZ\d*|IP\d+|А\d|A\d|\d+(?:T|В|V|Вт|мм|Ач|g|мл|шт))$/iu;

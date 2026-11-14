@@ -43,7 +43,7 @@ export async function exportResult(result, output) {
     ['Дата цены', r => r.unitPrice !== null ? r.card.price.at : null],
     ['Ссылка', r => r.card?.url, 52], ['Наличие', r => r.stock], ['Доставка', r => r.delivery],
     ['Согласование', r => r.approval], ['Причина / комментарий', r =>
-      [r.reason, r.notes, r.quantityClarification, r.deliveryClarification, r.quoteClarification].filter(Boolean).join(' · '), 50],
+      [r.reason, r.reviewReason, r.notes, r.quantityClarification, r.deliveryClarification, r.quoteClarification].filter(Boolean).join(' · '), 50],
   ], result.rows);
   addSheet('Аналоги', [
     ['Ключ строки', r => r.key], ['Исходный №', r => r.number], ['Исходный товар', r => r.text, 48],
