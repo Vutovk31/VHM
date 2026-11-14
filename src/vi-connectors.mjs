@@ -1,5 +1,6 @@
 import { extractProductText } from './normalize-product.mjs';
 import { evaluateCharacteristics } from './technical-checks.mjs';
+import { loadReviewedTechnicalEvidence, appliesToTechnicalCard } from './reviewed-technical-evidence.mjs';
 
 const present = value => typeof value === 'string' && value.trim() !== '';
 const validId = value => typeof value === 'string' && /^[1-9]\d*$/u.test(value);
@@ -18,8 +19,9 @@ export function projectVerifiedProduct(raw, requirements, ref, observedAt = null
   const analysis = extractProductText(raw.name);
   const characteristics = [
     ...(Array.isArray(raw.characteristics) ? raw.characteristics : []).filter(item =>
-      typeof item.name === 'string' && !item.name.startsWith('@')),
+      typeof item.name === 'string' && !item.name.normalize('NFKC').trim().startsWith('@')).map(({name,value,unit})=>({name,value,unit})),
     { name: '@title', value: raw.name },
+    ...(present(raw.category_path) ? [{ name: '@categoryPath', value: raw.category_path }] : []),
     { name: '@siteProductId', value: raw.id },
     ...(present(raw.sku) ? [{ name: '@viCode', value: raw.sku }] : []),
   ];
@@ -52,6 +54,7 @@ export function createViConnectors({ invoke, persist, session }) {
     throw new Error('Host MCP preflight and durable evidence writer are required');
   }
   let active = false;
+  const technicalEvidence = loadReviewedTechnicalEvidence(session.reviewedTechnicalEvidence);
   const saleTerms = new Map();
   const reviewedTerms = session.reviewedSaleTerms ?? [];
   if (!Array.isArray(reviewedTerms)) throw new Error('reviewedSaleTerms must be an array');
@@ -142,15 +145,25 @@ export function createViConnectors({ invoke, persist, session }) {
         products = [response.data];
       }
 
-      return products.filter(raw => validId(raw.id) && present(raw.name)).map(raw => {
+      const cards = [];
+      for (const raw of products.filter(raw => validId(raw.id) && present(raw.name))) {
         const card = projectVerifiedProduct(raw, requirements, response.ref, response.at);
+        const reviewed = technicalEvidence.get(raw.id);
+        if (appliesToTechnicalCard(reviewed,raw)) {
+          const ref = await persist({method:'reviewed_technical_evidence',mcpRef:response.ref,review:reviewed});
+          if (!present(ref)) throw new Error('Technical evidence persistence reference required');
+          card.characteristics.push(...reviewed.facts.map(({name,value,unit})=>({name,value,unit,evidenceRef:ref})));
+          card.checks = evaluateCharacteristics(requirements,card.characteristics,response.ref);
+          card.reviewedTechnicalEvidence = {ref,sourceUrl:reviewed.source.url,sha256:reviewed.source.sha256};
+        }
         const terms = saleTerms.get(raw.id);
         if (terms && terms.viCode === raw.sku && terms.url === raw.url) {
           const { size, sourceUnit, orderUnit, orderMultiple, url, reviewedBy, reviewedAt } = terms;
           card.pack = { size, sourceUnit, orderUnit, orderMultiple, ref: url, reviewedBy, reviewedAt };
         }
-        return card;
-      });
+        cards.push(card);
+      }
+      return cards;
     },
   };
 }

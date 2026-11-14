@@ -91,7 +91,7 @@ export function evaluateCharacteristics(requirements, characteristics, ref) {
       result[requirement.key] = { status: 'UNKNOWN', ref, detail: 'No structured technical test' };
       continue;
     }
-    if (field.startsWith('@') && test.kind === 'word') throw new Error('Identity metadata requires a strict token test');
+    if (text(field).startsWith('@') && test.kind === 'word') throw new Error('Identity metadata requires a strict token test');
     // Validate the expected representation even when the provider omitted the field.
     check({ value: null, unit: null }, test);
     const facts = characteristics.filter(item => text(item.name) === text(field));
@@ -104,9 +104,14 @@ export function evaluateCharacteristics(requirements, characteristics, ref) {
       return check({ ...fact, unit: text(fact.unit) ? fact.unit : labelUnit }, test);
     });
     const sameRepresentation = new Set(facts.map(fact => JSON.stringify([text(fact.value), text(fact.unit)]))).size <= 1;
-    const status = outcomes.length && outcomes.every(value => value === 'PASS') ? 'PASS' :
+    const reviewedField = text(field).startsWith('@reviewed.');
+    const hasReviewedRefs = facts.length && facts.every(fact=>typeof fact.evidenceRef === 'string' && fact.evidenceRef.trim());
+    const status = reviewedField && !hasReviewedRefs ? 'UNKNOWN' : outcomes.length && outcomes.every(value => value === 'PASS') ? 'PASS' :
       outcomes.length && outcomes.every(value => value === 'FAIL') && sameRepresentation ? 'FAIL' : 'UNKNOWN';
-    result[requirement.key] = { status, ref, detail: JSON.stringify(facts.map(({value, unit}) => ({value, unit}))) };
+    const reviewedRefs = reviewedField && hasReviewedRefs
+      ? [...new Set(facts.map(fact=>fact.evidenceRef))].join('\n') : ref;
+    result[requirement.key] = { status, ref: reviewedRefs,
+      detail: JSON.stringify(facts.map(({value, unit, evidenceRef}) => ({value, unit, ...(reviewedField ? {evidenceRef} : {})}))) };
   }
   return result;
 }

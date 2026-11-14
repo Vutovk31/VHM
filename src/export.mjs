@@ -41,7 +41,10 @@ export async function exportResult(result, output) {
     ['Цена / ед. заказа', r => r.unitPrice], ['Сумма', r => r.amount],
     ['Валюта', r => r.unitPrice !== null ? r.card.price.currency : null],
     ['Дата цены', r => r.unitPrice !== null ? r.card.price.at : null],
-    ['Ссылка', r => r.card?.url, 52], ['Наличие', r => r.stock], ['Доставка', r => r.delivery],
+    ['Ссылка', r => r.card?.url, 52],
+    ['Основание технической проверки', r => [r.card?.verification?.ref,
+      r.card?.reviewedTechnicalEvidence?.sourceUrl,r.card?.reviewedTechnicalEvidence?.ref].filter(Boolean).join('\n'), 52],
+    ['Наличие', r => r.stock], ['Доставка', r => r.delivery],
     ['Согласование', r => r.approval], ['Причина / комментарий', r =>
       [r.reason, r.reviewReason, r.notes, r.quantityClarification, r.deliveryClarification, r.quoteClarification].filter(Boolean).join(' · '), 50],
   ], result.rows);
